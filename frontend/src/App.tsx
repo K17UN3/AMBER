@@ -8,6 +8,8 @@ import ComingSoonPage from "./pages/ComingSoonPage";
 import HomePage from "./pages/HomePage";
 import ReceiptCompletePage from "./pages/ReceiptCompletePage";
 import ReceiptUploadPage from "./pages/ReceiptUploadPage";
+import ExpenseListPage from "./pages/ExpenseListPage";
+import ExpenseDetailPage from "./pages/ExpenseDetailPage";
 import type { AuthMode, LoginForm, RegisterForm, User } from "./types";
 import { readableError, readableErrorStatus } from "./utils/errors";
 import styles from "./App.module.css";
@@ -175,12 +177,15 @@ export default function App() {
         path="/expenses"
         element={
           <ProtectedRoute user={user}>
-            <ComingSoonPage
-              title="支出一覧"
-              description="支出保存APIができた後、登録済みの支出カードをここに表示します。"
-              onLogout={handleLogout}
-              isSubmitting={isSubmitting}
-            />
+            <ExpenseListPage onLogout={handleLogout} isSubmitting={isSubmitting} />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/expenses/:expenseId"
+        element={
+          <ProtectedRoute user={user}>
+            <ExpenseDetailPage onLogout={handleLogout} isSubmitting={isSubmitting} />
           </ProtectedRoute>
         }
       />

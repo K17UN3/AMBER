@@ -24,6 +24,18 @@ class ExpenseListCreateView(APIView):
         return Response(ExpenseSerializer(expense).data, status=status.HTTP_201_CREATED)
 
 
+class ExpenseDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        expense = Expense.objects.filter(user=request.user, pk=pk).first()
+        if expense is None:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        serializer = ExpenseSerializer(expense)
+        return Response(serializer.data)
+
+
 class MonthlyExpenseSummaryView(APIView):
     permission_classes = [IsAuthenticated]
 

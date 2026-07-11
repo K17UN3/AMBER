@@ -59,3 +59,5 @@ export type SavedExpense = ExpenseSavePayload & {
   created_at: string;
   updated_at: string;
 };
+
+export type ExpenseListItem = SavedExpense;

@@ -29,6 +29,27 @@ class ExpenseApiTests(APITestCase):
             "raw_ocr_text": "アンバーマート\n合計 1280",
         }
 
+    def test_monthly_summary_returns_only_current_user_totals(self):
+        Expense.objects.create(user=self.user, purchased_at="2026-06-05", total_amount=2500, category="食費")
+        Expense.objects.create(user=self.user, purchased_at="2026-06-10", total_amount=1800, category="日用品")
+        Expense.objects.create(user=self.user, purchased_at="2026-06-12", total_amount=4200, category="食費")
+        Expense.objects.create(user=self.other_user, purchased_at="2026-06-07", total_amount=9999, category="その他")
+
+        self.client.force_authenticate(self.user)
+        response = self.client.get(reverse("monthly-summary"), {"year": 2026, "month": 6})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["year"], 2026)
+        self.assertEqual(response.data["month"], 6)
+        self.assertEqual(response.data["grand_total"], 8500)
+        self.assertEqual(
+            response.data["categories"],
+            [
+                {"category": "日用品", "total": 1800},
+                {"category": "食費", "total": 6700},
+            ],
+        )
+
     def test_expense_create_requires_login(self):
         response = self.client.post(reverse("expense-list"), self.payload, format="json")
 
