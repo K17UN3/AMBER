@@ -39,12 +39,16 @@ export default function HomePage({ user, message, error, isSubmitting, onLogout 
         try {
           const expenses = await fetchExpenses();
           const monthlyExpenses = expenses.filter((expense) => {
-            const date = new Date(expense.purchased_at);
-            return (
-              !Number.isNaN(date.getTime()) &&
-              date.getFullYear() === currentYear &&
-              date.getMonth() + 1 === currentMonth
-            );
+            const parts = expense.purchased_at.split("-");
+            if (parts.length !== 3) {
+              return false;
+            }
+
+            const [yearStr, monthStr] = parts;
+            const year = Number(yearStr);
+            const month = Number(monthStr);
+
+            return year === currentYear && month === currentMonth;
           });
 
           const recentExpenses = [...monthlyExpenses]
