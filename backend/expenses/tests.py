@@ -110,3 +110,83 @@ class ExpenseApiTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["shop_name"], "アンバーマート")
+
+    def test_monthly_summary_requires_login(self):
+        response = self.client.get(reverse("monthly-summary"), {"year": 2026, "month": 6})
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_monthly_summary_returns_totals_for_current_user_and_month(self):
+        Expense.objects.create(user=self.user, **self.payload)
+        Expense.objects.create(
+            user=self.user,
+            shop_name="ドラッグストア",
+            purchased_at="2026-06-20",
+            total_amount=720,
+            category="日用品",
+        )
+        Expense.objects.create(
+            user=self.user,
+            shop_name="別月の店",
+            purchased_at="2026-05-31",
+            total_amount=5000,
+            category="食費",
+        )
+        Expense.objects.create(
+            user=self.other_user,
+            shop_name="別ユーザー店",
+            purchased_at="2026-06-13",
+            total_amount=999,
+            category="その他",
+        )
+        self.client.force_authenticate(self.user)
+
+        response = self.client.get(reverse("monthly-summary"), {"year": 2026, "month": 6})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["year"], 2026)
+        self.assertEqual(response.data["month"], 6)
+        self.assertEqual(response.data["grand_total"], 2000)
+        self.assertEqual(
+            response.data["categories"],
+            [
+                {"category": "日用品", "total": 720},
+                {"category": "食費", "total": 1280},
+            ],
+        )
+
+    def test_monthly_summary_returns_zero_when_no_expenses(self):
+        self.client.force_authenticate(self.user)
+
+        response = self.client.get(reverse("monthly-summary"), {"year": 2026, "month": 1})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["grand_total"], 0)
+        self.assertEqual(response.data["categories"], [])
+
+    def test_monthly_summary_defaults_to_current_year_month(self):
+        today = timezone.localdate()
+        Expense.objects.create(
+            user=self.user,
+            shop_name="今月の店",
+            purchased_at=today,
+            total_amount=300,
+            category="その他",
+        )
+        self.client.force_authenticate(self.user)
+
+        response = self.client.get(reverse("monthly-summary"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["year"], today.year)
+        self.assertEqual(response.data["month"], today.month)
+        self.assertEqual(response.data["grand_total"], 300)
+
+    def test_monthly_summary_rejects_invalid_query_params(self):
+        self.client.force_authenticate(self.user)
+
+        invalid_year_response = self.client.get(reverse("monthly-summary"), {"year": "abc", "month": 6})
+        invalid_month_response = self.client.get(reverse("monthly-summary"), {"year": 2026, "month": 13})
+
+        self.assertEqual(invalid_year_response.status_code, 400)
+        self.assertEqual(invalid_month_response.status_code, 400)
