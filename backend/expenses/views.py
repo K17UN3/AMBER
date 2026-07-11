@@ -40,14 +40,9 @@ class MonthlySummaryView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        today = timezone.localdate()
-        year = self._parse_query_int(request.query_params.get("year"), default=today.year)
-        month = self._parse_query_int(request.query_params.get("month"), default=today.month)
-
-        if year is None or year < 1:
-            year = today.year
-        if month is None or month < 1 or month > 12:
-            month = today.month
+        year, month, error = self._get_year_month(request)
+        if error:
+            return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
         expenses = Expense.objects.filter(
             user=request.user,
@@ -55,10 +50,12 @@ class MonthlySummaryView(APIView):
             purchased_at__month=month,
         )
 
-        categories = list(
-            expenses.values("category").annotate(total=Sum("total_amount")).order_by("-total", "category")
-        )
         grand_total = expenses.aggregate(total=Sum("total_amount"))["total"] or 0
+        categories = (
+            expenses.values("category")
+            .annotate(total=Sum("total_amount"))
+            .order_by("category")
+        )
 
         return Response(
             {
@@ -72,11 +69,20 @@ class MonthlySummaryView(APIView):
             }
         )
 
-    def _parse_query_int(self, value, default):
-        if value in (None, ""):
-            return default
+    def _get_year_month(self, request):
+        today = timezone.localdate()
+        year_value = request.query_params.get("year", today.year)
+        month_value = request.query_params.get("month", today.month)
 
         try:
-            return int(value)
+            year = int(year_value)
+            month = int(month_value)
         except (TypeError, ValueError):
-            return default
+            return None, None, {"detail": "year and month must be integers."}
+
+        if year < 1:
+            return None, None, {"detail": "year must be greater than or equal to 1."}
+        if month < 1 or month > 12:
+            return None, None, {"detail": "month must be between 1 and 12."}
+
+        return year, month, None
