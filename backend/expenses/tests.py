@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from .models import Expense
@@ -50,14 +51,20 @@ class ExpenseApiTests(APITestCase):
         )
 
     def test_monthly_summary_defaults_to_current_month_when_params_are_invalid(self):
-        Expense.objects.create(user=self.user, purchased_at="2026-06-01", total_amount=1000, category="その他")
+        today = timezone.localdate()
+        Expense.objects.create(
+            user=self.user,
+            purchased_at=f"{today.year}-{today.month:02d}-01",
+            total_amount=1000,
+            category="その他",
+        )
         self.client.force_authenticate(self.user)
 
         response = self.client.get(reverse("monthly-summary"), {"year": "bad", "month": 99})
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["year"], 2026)
-        self.assertEqual(response.data["month"], 6)
+        self.assertEqual(response.data["year"], today.year)
+        self.assertEqual(response.data["month"], today.month)
         self.assertEqual(response.data["grand_total"], 1000)
         self.assertEqual(response.data["categories"], [{"category": "その他", "total": 1000}])
 

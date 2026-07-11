@@ -56,7 +56,7 @@ class MonthlySummaryView(APIView):
         )
 
         categories = list(
-            expenses.values("category").annotate(total=Sum("total_amount")).order_by("category")
+            expenses.values("category").annotate(total=Sum("total_amount")).order_by("-total", "category")
         )
         grand_total = expenses.aggregate(total=Sum("total_amount"))["total"] or 0
 
