@@ -123,7 +123,7 @@ def extract_total_amount(raw_text):
     for line in raw_text.splitlines():
         if not re.search(TOTAL_KEYWORDS, line):
             continue
-        amounts = re.findall(r"(?:¥|￥)?\s*([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)", line)
+        amounts = re.findall(r"(?:¥|￥)?\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?![0-9])", line)
         if amounts:
             return int(amounts[-1].replace(",", ""))
     return None

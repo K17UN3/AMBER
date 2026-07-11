@@ -9,6 +9,7 @@ import { readableError } from "../utils/errors";
 import styles from "./ReceiptUploadPage.module.css";
 
 const maxImageSize = 10 * 1024 * 1024;
+const maxPollingRetries = 5;
 const categories = ["食費", "日用品", "交通費", "医療費", "娯楽", "その他"];
 const initialConfirmForm: ExpenseSavePayload = {
   shop_name: "",
@@ -33,6 +34,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
   const [error, setError] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [pollingRetryCount, setPollingRetryCount] = useState(0);
   const [confirmForm, setConfirmForm] = useState<ExpenseSavePayload>(initialConfirmForm);
 
   useEffect(() => {
@@ -52,10 +54,12 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
       return;
     }
 
+    const delay = Math.min(1500 * 2 ** pollingRetryCount, 10000);
     const timer = window.setTimeout(async () => {
       try {
         const nextResult = await getReceiptAnalysisJob(result.id);
         setResult(nextResult);
+        setPollingRetryCount(0);
         if (nextResult.status === "succeeded") {
           populateConfirmForm(nextResult);
           setMessage("OCR解析が完了しました。内容を確認して保存してください。");
@@ -64,12 +68,18 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
           setError(nextResult.error_message || "OCR解析に失敗しました。もう一度お試しください。");
         }
       } catch (requestError) {
-        setError(readableError(requestError));
+        if (pollingRetryCount < maxPollingRetries) {
+          setPollingRetryCount((current) => current + 1);
+          setError("解析状況の取得に失敗しました。再接続しています。");
+          return;
+        }
+        setError(`${readableError(requestError)} 画像を選び直して、もう一度お試しください。`);
+        setResult(null);
       }
-    }, 1500);
+    }, delay);
 
     return () => window.clearTimeout(timer);
-  }, [result]);
+  }, [result, pollingRetryCount]);
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
@@ -107,6 +117,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
     setError("");
     setMessage("");
     setResult(null);
+    setPollingRetryCount(0);
 
     try {
       const analyzedResult = await startReceiptAnalysis(selectedFile);
@@ -143,6 +154,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
   function clearSelection() {
     setSelectedFile(null);
     setResult(null);
+    setPollingRetryCount(0);
     setConfirmForm(initialConfirmForm);
     setMessage("");
     setError("");

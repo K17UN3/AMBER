@@ -22,6 +22,7 @@ class OCRJob(models.Model):
     content_type = models.CharField(max_length=100)
     file_size = models.PositiveIntegerField()
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    attempt_count = models.PositiveIntegerField(default=0)
     shop_name = models.CharField(max_length=255, blank=True)
     purchased_at = models.DateField(null=True, blank=True)
     total_amount = models.PositiveIntegerField(null=True, blank=True)
@@ -34,7 +35,7 @@ class OCRJob(models.Model):
 
     class Meta:
         ordering = ["created_at"]
-        indexes = [models.Index(fields=["status", "created_at"])]
+        indexes = [models.Index(fields=["status", "created_at"], name="receipts_oc_status_8eb6e0_idx")]
 
 
 class OCRCorrectionHistory(models.Model):

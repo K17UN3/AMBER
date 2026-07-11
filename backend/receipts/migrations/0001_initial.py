@@ -25,6 +25,7 @@ class Migration(migrations.Migration):
                 ("content_type", models.CharField(max_length=100)),
                 ("file_size", models.PositiveIntegerField()),
                 ("status", models.CharField(choices=[("pending", "待機中"), ("processing", "解析中"), ("succeeded", "成功"), ("failed", "失敗")], default="pending", max_length=20)),
+                ("attempt_count", models.PositiveIntegerField(default=0)),
                 ("shop_name", models.CharField(blank=True, max_length=255)),
                 ("purchased_at", models.DateField(blank=True, null=True)),
                 ("total_amount", models.PositiveIntegerField(blank=True, null=True)),

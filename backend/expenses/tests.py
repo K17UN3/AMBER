@@ -2,6 +2,7 @@ from django.contrib.auth import get_user_model
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APITestCase
+from unittest.mock import patch
 
 from .models import Expense
 from receipts.models import OCRCorrectionHistory, OCRJob
@@ -73,6 +74,27 @@ class ExpenseApiTests(APITestCase):
         self.assertEqual(history.expense_id, response.data["id"])
         self.assertEqual(history.ocr_values["shop_name"], "OCR店名")
         self.assertEqual(history.saved_values["shop_name"], "修正後の店名")
+
+    def test_expense_create_rolls_back_when_history_creation_fails(self):
+        ocr_job = OCRJob.objects.create(
+            user=self.user,
+            original_filename="receipt.jpg",
+            content_type="image/jpeg",
+            file_size=5,
+            status=OCRJob.Status.SUCCEEDED,
+            image="receipts/test/receipt.jpg",
+        )
+        self.client.force_authenticate(self.user)
+
+        with patch("expenses.views.OCRCorrectionHistory.objects.create", side_effect=RuntimeError("history failed")):
+            with self.assertRaises(RuntimeError):
+                self.client.post(
+                    reverse("expense-list"),
+                    {**self.payload, "ocr_job_id": str(ocr_job.id)},
+                    format="json",
+                )
+
+        self.assertEqual(Expense.objects.count(), 0)
 
     def test_expense_create_validates_required_fields(self):
         self.client.force_authenticate(self.user)

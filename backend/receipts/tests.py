@@ -1,9 +1,14 @@
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import SimpleTestCase
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from .models import OCRJob
+from .services import extract_total_amount
 from .worker import process_next_ocr_job
 
 User = get_user_model()
@@ -89,6 +94,70 @@ class ReceiptAnalyzeApiTests(APITestCase):
         self.assertEqual(job.purchased_at.isoformat(), "2026-07-11")
         self.assertEqual(job.total_amount, 1280)
         self.assertEqual(job.ocr_lines, expected["ocr_lines"])
+        self.assertEqual(job.attempt_count, 1)
+
+    def test_worker_recovers_a_stale_job_within_retry_limit(self):
+        job = OCRJob.objects.create(
+            user=self.user,
+            image=SimpleUploadedFile("receipt.jpg", b"image", content_type="image/jpeg"),
+            original_filename="receipt.jpg",
+            content_type="image/jpeg",
+            file_size=5,
+            status=OCRJob.Status.PROCESSING,
+            started_at=timezone.now() - timedelta(minutes=6),
+            attempt_count=1,
+        )
+        expected = {
+            "raw_ocr_text": "",
+            "ocr_lines": [],
+            "shop_name": None,
+            "purchased_at": None,
+            "total_amount": None,
+        }
+
+        from unittest.mock import patch
+
+        with patch("receipts.worker.analyze_receipt", return_value=expected):
+            self.assertTrue(process_next_ocr_job())
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, OCRJob.Status.SUCCEEDED)
+        self.assertEqual(job.attempt_count, 2)
+
+    def test_worker_fails_a_stale_job_after_maximum_attempts(self):
+        job = OCRJob.objects.create(
+            user=self.user,
+            image=SimpleUploadedFile("receipt.jpg", b"image", content_type="image/jpeg"),
+            original_filename="receipt.jpg",
+            content_type="image/jpeg",
+            file_size=5,
+            status=OCRJob.Status.PROCESSING,
+            started_at=timezone.now() - timedelta(minutes=6),
+            attempt_count=3,
+        )
+
+        self.assertFalse(process_next_ocr_job())
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, OCRJob.Status.FAILED)
+        self.assertIn("タイムアウト", job.error_message)
+
+    def test_worker_marks_unexpected_storage_errors_as_failed(self):
+        job = OCRJob.objects.create(
+            user=self.user,
+            image=SimpleUploadedFile("receipt.jpg", b"image", content_type="image/jpeg"),
+            original_filename="receipt.jpg",
+            content_type="image/jpeg",
+            file_size=5,
+        )
+
+        from unittest.mock import patch
+
+        with patch("receipts.worker._download_image_to_temporary_file", side_effect=NotImplementedError):
+            self.assertTrue(process_next_ocr_job())
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, OCRJob.Status.FAILED)
 
     def test_analyze_rejects_missing_image(self):
         self.client.force_authenticate(self.user)
@@ -110,3 +179,10 @@ class ReceiptAnalyzeApiTests(APITestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["detail"], "画像ファイルを選択してください。")
+
+
+class ReceiptParsingTests(SimpleTestCase):
+    def test_extract_total_amount_supports_comma_and_plain_integer_amounts(self):
+        self.assertEqual(extract_total_amount("合計 1280"), 1280)
+        self.assertEqual(extract_total_amount("合計 1,280"), 1280)
+        self.assertEqual(extract_total_amount("合計 980"), 980)

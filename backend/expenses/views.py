@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import status
@@ -31,25 +32,26 @@ class ExpenseListCreateView(APIView):
             ).first()
             if ocr_job is None:
                 return Response({"ocr_job_id": ["完了したOCRジョブを指定してください。"]}, status=status.HTTP_400_BAD_REQUEST)
-        expense = serializer.save(user=request.user)
-        if ocr_job:
-            OCRCorrectionHistory.objects.create(
-                job=ocr_job,
-                expense=expense,
-                ocr_values={
-                    "shop_name": ocr_job.shop_name,
-                    "purchased_at": ocr_job.purchased_at.isoformat() if ocr_job.purchased_at else None,
-                    "total_amount": ocr_job.total_amount,
-                    "raw_ocr_text": ocr_job.raw_ocr_text,
-                },
-                saved_values={
-                    "shop_name": expense.shop_name,
-                    "purchased_at": expense.purchased_at.isoformat(),
-                    "total_amount": expense.total_amount,
-                    "category": expense.category,
-                    "raw_ocr_text": expense.raw_ocr_text,
-                },
-            )
+        with transaction.atomic():
+            expense = serializer.save(user=request.user)
+            if ocr_job:
+                OCRCorrectionHistory.objects.create(
+                    job=ocr_job,
+                    expense=expense,
+                    ocr_values={
+                        "shop_name": ocr_job.shop_name,
+                        "purchased_at": ocr_job.purchased_at.isoformat() if ocr_job.purchased_at else None,
+                        "total_amount": ocr_job.total_amount,
+                        "raw_ocr_text": ocr_job.raw_ocr_text,
+                    },
+                    saved_values={
+                        "shop_name": expense.shop_name,
+                        "purchased_at": expense.purchased_at.isoformat(),
+                        "total_amount": expense.total_amount,
+                        "category": expense.category,
+                        "raw_ocr_text": expense.raw_ocr_text,
+                    },
+                )
         return Response(ExpenseSerializer(expense).data, status=status.HTTP_201_CREATED)
 
 
