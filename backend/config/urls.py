@@ -3,7 +3,7 @@ from django.http import JsonResponse
 from django.urls import path
 
 from accounts.views import CsrfTokenView, CurrentUserView, LoginView, LogoutView, RegisterView
-from expenses.views import ExpenseListCreateView, MonthlyExpenseSummaryView
+from expenses.views import ExpenseDetailView, ExpenseListCreateView, MonthlyExpenseSummaryView
 from receipts.views import OCRJobDetailView, ReceiptAnalyzeView
 
 
@@ -22,5 +22,7 @@ urlpatterns = [
     path("api/receipts/analyze/", ReceiptAnalyzeView.as_view(), name="receipt-analyze"),
     path("api/receipts/ocr-jobs/<uuid:job_id>/", OCRJobDetailView.as_view(), name="ocr-job-detail"),
     path("api/expenses/", ExpenseListCreateView.as_view(), name="expense-list"),
+    path("api/expenses/<int:pk>/", ExpenseDetailView.as_view(), name="expense-detail"),
+    path("api/receipts/analyze/", ReceiptAnalyzeView.as_view(), name="receipt-analyze"),
     path("api/summary/monthly/", MonthlyExpenseSummaryView.as_view(), name="monthly-summary"),
 ]

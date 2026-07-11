@@ -1,14 +1,10 @@
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { fetchExpenses } from "../api/expenses";
 import type { DashboardSummary, User } from "../types";
 import { formatCurrency } from "../utils/format";
 import styles from "./HomePage.module.css";
-
-const dashboardSummary: DashboardSummary = {
-  totalAmount: 0,
-  receiptCount: 0,
-  recentExpenses: [],
-};
 
 type HomePageProps = {
   user: User;
@@ -20,6 +16,51 @@ type HomePageProps = {
 
 export default function HomePage({ user, message, error, isSubmitting, onLogout }: HomePageProps) {
   const navigate = useNavigate();
+  const [dashboardSummary, setDashboardSummary] = useState<DashboardSummary>({
+    totalAmount: 0,
+    receiptCount: 0,
+    recentExpenses: [],
+  });
+
+  useEffect(() => {
+    async function loadDashboard() {
+      try {
+        const expenses = await fetchExpenses();
+        const today = new Date();
+        const currentMonth = today.getMonth();
+        const currentYear = today.getFullYear();
+
+        const monthlyExpenses = expenses.filter((expense) => {
+          const purchasedAt = new Date(expense.purchased_at);
+          return (
+            purchasedAt.getFullYear() === currentYear && purchasedAt.getMonth() === currentMonth
+          );
+        });
+
+        const totalAmount = monthlyExpenses.reduce((sum, expense) => sum + expense.total_amount, 0);
+        const recentExpenses = [...monthlyExpenses]
+          .sort((left, right) => Date.parse(right.purchased_at) - Date.parse(left.purchased_at))
+          .slice(0, 5)
+          .map((expense) => ({
+            id: expense.id,
+            shopName: expense.shop_name,
+            purchasedAt: expense.purchased_at,
+            category: expense.category,
+            totalAmount: expense.total_amount,
+          }));
+
+        setDashboardSummary({
+          totalAmount,
+          receiptCount: monthlyExpenses.length,
+          recentExpenses,
+        });
+      } catch {
+        setDashboardSummary({ totalAmount: 0, receiptCount: 0, recentExpenses: [] });
+      }
+    }
+
+    void loadDashboard();
+  }, []);
 
   return (
     <main className={styles.shell}>
