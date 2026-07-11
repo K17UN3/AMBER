@@ -3,8 +3,8 @@ import type { ChangeEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { saveExpense } from "../api/expenses";
-import { analyzeReceiptImage } from "../api/receipts";
-import type { ExpenseSavePayload, ReceiptAnalyzeResult } from "../types";
+import { getReceiptAnalysisJob, startReceiptAnalysis } from "../api/receipts";
+import type { ExpenseSavePayload, OCRJob } from "../types";
 import { readableError } from "../utils/errors";
 import styles from "./ReceiptUploadPage.module.css";
 
@@ -28,7 +28,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
-  const [result, setResult] = useState<ReceiptAnalyzeResult | null>(null);
+  const [result, setResult] = useState<OCRJob | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -46,6 +46,30 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
 
     return () => URL.revokeObjectURL(objectUrl);
   }, [selectedFile]);
+
+  useEffect(() => {
+    if (!result || !["pending", "processing"].includes(result.status)) {
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const nextResult = await getReceiptAnalysisJob(result.id);
+        setResult(nextResult);
+        if (nextResult.status === "succeeded") {
+          populateConfirmForm(nextResult);
+          setMessage("OCR解析が完了しました。内容を確認して保存してください。");
+        }
+        if (nextResult.status === "failed") {
+          setError(nextResult.error_message || "OCR解析に失敗しました。もう一度お試しください。");
+        }
+      } catch (requestError) {
+        setError(readableError(requestError));
+      }
+    }, 1500);
+
+    return () => window.clearTimeout(timer);
+  }, [result]);
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
@@ -85,16 +109,9 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
     setResult(null);
 
     try {
-      const analyzedResult = await analyzeReceiptImage(selectedFile);
+      const analyzedResult = await startReceiptAnalysis(selectedFile);
       setResult(analyzedResult);
-      setConfirmForm({
-        shop_name: analyzedResult.shop_name ?? "",
-        purchased_at: analyzedResult.purchased_at ?? "",
-        total_amount: analyzedResult.total_amount ?? 0,
-        category: "その他",
-        raw_ocr_text: analyzedResult.raw_ocr_text,
-      });
-      setMessage(analyzedResult.detail ?? "画像をアップロードしました。");
+      setMessage("OCR解析を受け付けました。解析が完了するまでお待ちください。");
     } catch (requestError) {
       setError(readableError(requestError));
     } finally {
@@ -114,7 +131,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
     setMessage("");
 
     try {
-      const savedExpense = await saveExpense(confirmForm);
+      const savedExpense = await saveExpense({ ...confirmForm, ocr_job_id: result?.id });
       navigate("/receipts/complete", { state: { expense: savedExpense } });
     } catch (requestError) {
       setError(readableError(requestError));
@@ -135,7 +152,18 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
   }
 
   const hasSelection = selectedFile !== null;
-  const isBusy = isSubmitting || isAnalyzing || isSaving;
+  const isOcrPending = result?.status === "pending" || result?.status === "processing";
+  const isBusy = isSubmitting || isAnalyzing || isSaving || isOcrPending;
+
+  function populateConfirmForm(ocrJob: OCRJob) {
+    setConfirmForm({
+      shop_name: ocrJob.shop_name ?? "",
+      purchased_at: ocrJob.purchased_at ?? "",
+      total_amount: ocrJob.total_amount ?? 0,
+      category: "その他",
+      raw_ocr_text: ocrJob.raw_ocr_text,
+    });
+  }
 
   return (
     <main className={styles.shell}>
@@ -195,9 +223,9 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
           type="button"
           className={styles.primaryButton}
           onClick={handleAnalyze}
-          disabled={!hasSelection || isAnalyzing || isSaving}
+          disabled={!hasSelection || isBusy}
         >
-          {isAnalyzing ? "解析中..." : "OCR解析へ進む"}
+          {isAnalyzing || isOcrPending ? "解析中..." : "OCR解析へ進む"}
         </button>
         <button
           type="button"
@@ -209,14 +237,14 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
         </button>
       </section>
 
-      {isAnalyzing && (
+      {(isAnalyzing || isOcrPending) && (
         <section className={styles.loadingPanel} aria-live="polite">
           <span className={styles.spinner} aria-hidden="true" />
-          <strong>画像を送信しています</strong>
+          <strong>{result?.status === "processing" ? "画像を読み取っています" : "OCR解析を待機しています"}</strong>
         </section>
       )}
 
-      {result && (
+      {result?.status === "succeeded" && (
         <section className={styles.resultPanel} aria-labelledby="receipt-result-title">
           <div className={styles.resultHeading}>
             <div>

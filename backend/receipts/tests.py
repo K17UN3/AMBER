@@ -3,6 +3,8 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from rest_framework.test import APITestCase
 
+from .models import OCRJob
+from .worker import process_next_ocr_job
 
 User = get_user_model()
 
@@ -20,7 +22,7 @@ class ReceiptAnalyzeApiTests(APITestCase):
 
         self.assertEqual(response.status_code, 403)
 
-    def test_analyze_accepts_image_upload_without_saving_expense(self):
+    def test_analyze_creates_pending_job_without_saving_expense(self):
         self.client.force_authenticate(self.user)
         image = SimpleUploadedFile(
             "receipt.jpg",
@@ -30,12 +32,63 @@ class ReceiptAnalyzeApiTests(APITestCase):
 
         response = self.client.post(reverse("receipt-analyze"), {"image": image}, format="multipart")
 
-        self.assertEqual(response.status_code, 200)
-        self.assertIsNone(response.data["shop_name"])
-        self.assertIsNone(response.data["purchased_at"])
-        self.assertIsNone(response.data["total_amount"])
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data["status"], OCRJob.Status.PENDING)
         self.assertEqual(response.data["image"]["name"], "receipt.jpg")
         self.assertEqual(response.data["image"]["content_type"], "image/jpeg")
+        self.assertEqual(OCRJob.objects.count(), 1)
+
+    def test_job_status_is_only_available_to_its_owner(self):
+        self.client.force_authenticate(self.user)
+        job = OCRJob.objects.create(
+            user=self.user,
+            image=SimpleUploadedFile("receipt.jpg", b"image", content_type="image/jpeg"),
+            original_filename="receipt.jpg",
+            content_type="image/jpeg",
+            file_size=5,
+        )
+        response = self.client.get(reverse("ocr-job-detail", kwargs={"job_id": job.id}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["id"], str(job.id))
+
+        other_user = User.objects.create_user(
+            username="bob",
+            email="bob@example.com",
+            password="StrongPass123",
+        )
+        self.client.force_authenticate(other_user)
+        response = self.client.get(reverse("ocr-job-detail", kwargs={"job_id": job.id}))
+        self.assertEqual(response.status_code, 404)
+
+    def test_worker_persists_text_coordinates_and_extracted_values(self):
+        job = OCRJob.objects.create(
+            user=self.user,
+            image=SimpleUploadedFile("receipt.jpg", b"image", content_type="image/jpeg"),
+            original_filename="receipt.jpg",
+            content_type="image/jpeg",
+            file_size=5,
+        )
+        expected = {
+            "raw_ocr_text": "アンバーマート\n2026/07/11\n合計 1,280",
+            "ocr_lines": [{"text": "アンバーマート", "confidence": 0.99, "coordinates": [[0, 0], [1, 1]]}],
+            "shop_name": "アンバーマート",
+            "purchased_at": "2026-07-11",
+            "total_amount": 1280,
+        }
+
+        with self.settings():
+            from unittest.mock import patch
+
+            with patch("receipts.worker.analyze_receipt", return_value=expected):
+                self.assertTrue(process_next_ocr_job())
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, OCRJob.Status.SUCCEEDED)
+        self.assertEqual(job.shop_name, "アンバーマート")
+        self.assertEqual(job.purchased_at.isoformat(), "2026-07-11")
+        self.assertEqual(job.total_amount, 1280)
+        self.assertEqual(job.ocr_lines, expected["ocr_lines"])
 
     def test_analyze_rejects_missing_image(self):
         self.client.force_authenticate(self.user)

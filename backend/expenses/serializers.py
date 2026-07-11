@@ -5,6 +5,7 @@ from .models import Expense
 
 class ExpenseSerializer(serializers.ModelSerializer):
     user = serializers.PrimaryKeyRelatedField(read_only=True)
+    ocr_job_id = serializers.UUIDField(write_only=True, required=False)
 
     class Meta:
         model = Expense
@@ -17,10 +18,15 @@ class ExpenseSerializer(serializers.ModelSerializer):
             "category",
             "image",
             "raw_ocr_text",
+            "ocr_job_id",
             "created_at",
             "updated_at",
         ]
         read_only_fields = ["id", "user", "created_at", "updated_at"]
+
+    def create(self, validated_data):
+        validated_data.pop("ocr_job_id", None)
+        return super().create(validated_data)
 
     def validate_category(self, value):
         if not value.strip():

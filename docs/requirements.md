@@ -79,7 +79,7 @@ OCRで文字を読み取る
 |---|---|
 | 認証 | ユーザー登録、ログイン、ログアウト |
 | レシート登録 | スマホから画像撮影または画像選択 |
-| OCR | Google Cloud Vision APIによる文字読み取り |
+| OCR | PaddleOCRによる文字読み取り |
 | 確認・修正 | OCR結果の確認、手動修正 |
 | 支出管理 | 支出データの保存、一覧、詳細、編集、削除 |
 | 集計 | 月次合計、カテゴリー別合計 |
@@ -171,7 +171,7 @@ OCRで文字を読み取る
 | OCR-01 | 画像選択 | スマホまたはPCから画像を選択できる | 高 |
 | OCR-02 | カメラ起動 | スマホでは外向きカメラによる撮影を想定する | 高 |
 | OCR-03 | 画像プレビュー | OCR前に選択した画像を表示できる | 中 |
-| OCR-04 | OCR解析 | Google Cloud Vision APIで文字を読み取る | 高 |
+| OCR-04 | OCR解析 | PaddleOCRで文字を読み取る | 高 |
 | OCR-05 | 情報抽出 | OCR結果から店名、購入日、合計金額を抽出する | 高 |
 | OCR-06 | 解析結果返却 | OCR結果をJSON形式でフロントエンドへ返す | 高 |
 | OCR-07 | OCR失敗時表示 | 失敗時にエラーメッセージを表示する | 中 |
@@ -355,7 +355,7 @@ GET /api/summary/monthly/?year=2026&month=5
 | API | Django REST Framework |
 | データベース | SQLite / PostgreSQL |
 | 認証 | Django標準認証機能を利用したセッション認証 |
-| OCR | Google Cloud Vision API |
+| OCR | PaddleOCR |
 | 画像保存 | Cloudinary |
 | デプロイ | Vercel / Render Web Service / Render PostgreSQL |
 
@@ -380,7 +380,7 @@ Render Managed DB
 Cloudinary
 レシート画像保存
  ↓
-Google Cloud Vision API
+PaddleOCR Worker
 OCR処理
 ```
 
@@ -392,7 +392,7 @@ OCR処理
 | DEBUG | 開発環境ではTrue、本番環境ではFalse |
 | DATABASE_URL | DB接続情報 |
 | VITE_API_BASE_URL | フロントエンドから呼び出すDjango APIのベースURL |
-| GOOGLE_APPLICATION_CREDENTIALS | Google Cloud Vision API認証情報 |
+| PADDLE_PDX_MODEL_SOURCE | PaddleOCRモデルのダウンロード元 |
 | CORS_ALLOWED_ORIGINS | フロントエンドのURL |
 | CSRF_TRUSTED_ORIGINS | CSRFを許可するURL |
 | CLOUDINARY_URL | Cloudinary接続情報 |

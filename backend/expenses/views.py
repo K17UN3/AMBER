@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 
 from .models import Expense
 from .serializers import ExpenseSerializer
+from receipts.models import OCRCorrectionHistory, OCRJob
 
 
 class ExpenseListCreateView(APIView):
@@ -20,7 +21,35 @@ class ExpenseListCreateView(APIView):
     def post(self, request):
         serializer = ExpenseSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        ocr_job_id = serializer.validated_data.get("ocr_job_id")
+        ocr_job = None
+        if ocr_job_id:
+            ocr_job = OCRJob.objects.filter(
+                pk=ocr_job_id,
+                user=request.user,
+                status=OCRJob.Status.SUCCEEDED,
+            ).first()
+            if ocr_job is None:
+                return Response({"ocr_job_id": ["完了したOCRジョブを指定してください。"]}, status=status.HTTP_400_BAD_REQUEST)
         expense = serializer.save(user=request.user)
+        if ocr_job:
+            OCRCorrectionHistory.objects.create(
+                job=ocr_job,
+                expense=expense,
+                ocr_values={
+                    "shop_name": ocr_job.shop_name,
+                    "purchased_at": ocr_job.purchased_at.isoformat() if ocr_job.purchased_at else None,
+                    "total_amount": ocr_job.total_amount,
+                    "raw_ocr_text": ocr_job.raw_ocr_text,
+                },
+                saved_values={
+                    "shop_name": expense.shop_name,
+                    "purchased_at": expense.purchased_at.isoformat(),
+                    "total_amount": expense.total_amount,
+                    "category": expense.category,
+                    "raw_ocr_text": expense.raw_ocr_text,
+                },
+            )
         return Response(ExpenseSerializer(expense).data, status=status.HTTP_201_CREATED)
 
 

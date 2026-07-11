@@ -4,6 +4,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .models import OCRJob
+from .serializers import OCRJobSerializer
 
 MAX_IMAGE_SIZE = 10 * 1024 * 1024
 
@@ -20,7 +22,7 @@ class ReceiptAnalyzeView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not image.content_type.startswith("image/"):
+        if not image.content_type or not image.content_type.startswith("image/"):
             return Response(
                 {"detail": "画像ファイルを選択してください。"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -32,18 +34,21 @@ class ReceiptAnalyzeView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        return Response(
-            {
-                "shop_name": None,
-                "purchased_at": None,
-                "total_amount": None,
-                "raw_ocr_text": "",
-                "image": {
-                    "name": image.name,
-                    "size": image.size,
-                    "content_type": image.content_type,
-                },
-                "detail": "画像を受け付けました。OCR解析は次の実装で接続します。",
-            },
-            status=status.HTTP_200_OK,
+        job = OCRJob.objects.create(
+            user=request.user,
+            image=image,
+            original_filename=image.name,
+            content_type=image.content_type,
+            file_size=image.size,
         )
+        return Response(OCRJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
+
+
+class OCRJobDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, job_id):
+        job = OCRJob.objects.filter(pk=job_id, user=request.user).first()
+        if job is None:
+            return Response({"detail": "OCRジョブが見つかりません。"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(OCRJobSerializer(job).data)

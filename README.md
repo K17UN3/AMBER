@@ -123,7 +123,7 @@ OCRで文字を読み取る
 | バックエンド | Python / Django |
 | データベース | SQLite / PostgreSQL |
 | 認証 | Django標準認証機能を利用したセッション認証 |
-| OCR | Google Cloud Vision API |
+| OCR | PaddleOCR |
 | デプロイ | Vercel（フロントエンド） / Render Web Service（バックエンド） / Render PostgreSQL |
 
 ## 技術構成の理由
@@ -230,10 +230,10 @@ SECRET_KEY=your-secret-key
 DEBUG=True
 CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
-GOOGLE_APPLICATION_CREDENTIALS=path/to/google-credentials.json
+PADDLE_PDX_MODEL_SOURCE=BOS
 ```
 
-注意：`.env` やGoogle Cloudの認証情報ファイルはGitHubにアップロードしないでください。
+注意：`.env` や本番環境の接続情報はGitHubにアップロードしないでください。
 
 ## デプロイ設定
 
@@ -409,7 +409,7 @@ Djangoのログイン処理とつなげます。
 |---|---|
 | フロントエンド担当 | 画面作成、CSS調整、スマホ対応 |
 | バックエンド担当 | Djangoの処理、DB、認証 |
-| OCR担当 | Google Cloud Vision API連携、OCR結果処理 |
+| OCR担当 | PaddleOCRワーカー連携、OCR結果処理 |
 | DB担当 | モデル設計、マイグレーション、データ保存 |
 | 発表・資料担当 | 発表スライド、デモ準備、README整理 |
 

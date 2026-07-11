@@ -4,6 +4,7 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from .models import Expense
+from receipts.models import OCRCorrectionHistory, OCRJob
 
 
 User = get_user_model()
@@ -44,6 +45,34 @@ class ExpenseApiTests(APITestCase):
         self.assertEqual(expense.user, self.user)
         self.assertEqual(response.data["user"], self.user.id)
         self.assertEqual(response.data["shop_name"], "アンバーマート")
+
+    def test_expense_create_records_ocr_correction_history(self):
+        ocr_job = OCRJob.objects.create(
+            user=self.user,
+            original_filename="receipt.jpg",
+            content_type="image/jpeg",
+            file_size=5,
+            status=OCRJob.Status.SUCCEEDED,
+            shop_name="OCR店名",
+            purchased_at="2026-06-13",
+            total_amount=1200,
+            raw_ocr_text="OCR店名\n合計 1200",
+            image="receipts/test/receipt.jpg",
+        )
+        self.client.force_authenticate(self.user)
+
+        response = self.client.post(
+            reverse("expense-list"),
+            {**self.payload, "ocr_job_id": str(ocr_job.id), "shop_name": "修正後の店名"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        history = OCRCorrectionHistory.objects.get()
+        self.assertEqual(history.job, ocr_job)
+        self.assertEqual(history.expense_id, response.data["id"])
+        self.assertEqual(history.ocr_values["shop_name"], "OCR店名")
+        self.assertEqual(history.saved_values["shop_name"], "修正後の店名")
 
     def test_expense_create_validates_required_fields(self):
         self.client.force_authenticate(self.user)
