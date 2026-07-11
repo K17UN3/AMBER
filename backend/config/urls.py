@@ -20,6 +20,7 @@ urlpatterns = [
     path("api/auth/login/", LoginView.as_view(), name="auth-login"),
     path("api/auth/logout/", LogoutView.as_view(), name="auth-logout"),
     path("api/receipts/analyze/", ReceiptAnalyzeView.as_view(), name="receipt-analyze"),
+    path("api/expenses/<int:pk>/", ExpenseDetailView.as_view(), name="expense-detail"),
     path("api/expenses/", ExpenseListCreateView.as_view(), name="expense-list"),
     path("api/summary/monthly/", MonthlyExpenseSummaryView.as_view(), name="monthly-summary"),
 ]

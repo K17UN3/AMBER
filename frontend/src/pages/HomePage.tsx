@@ -37,10 +37,14 @@ export default function HomePage({ user, message, error, isSubmitting, onLogout 
 
         try {
           const expenses = await fetchExpenses();
-          const monthKey = `${currentYear}-${String(currentMonth).padStart(2, "0")}`;
-          const monthlyExpenses = expenses.filter(
-            (expense) => expense.purchased_at.slice(0, 7) === monthKey,
-          );
+          const monthlyExpenses = expenses.filter((expense) => {
+            const date = new Date(expense.purchased_at);
+            return (
+              !Number.isNaN(date.getTime()) &&
+              date.getFullYear() === currentYear &&
+              date.getMonth() + 1 === currentMonth
+            );
+          });
 
           const recentExpenses = [...monthlyExpenses]
             .sort((left, right) => Date.parse(right.purchased_at) - Date.parse(left.purchased_at))
