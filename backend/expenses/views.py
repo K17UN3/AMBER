@@ -36,7 +36,7 @@ class ExpenseDetailView(APIView):
         return Response(serializer.data)
 
 
-class MonthlySummaryView(APIView):
+class MonthlyExpenseSummaryView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
