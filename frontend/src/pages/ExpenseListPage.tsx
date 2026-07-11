@@ -19,6 +19,9 @@ export default function ExpenseListPage({ onLogout, isSubmitting }: ExpenseListP
 
   useEffect(() => {
     async function loadExpenses() {
+      setExpenses([]);
+      setError("");
+
       try {
         const data = await fetchExpenses();
         setExpenses(data);

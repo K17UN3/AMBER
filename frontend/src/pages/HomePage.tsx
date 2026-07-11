@@ -32,6 +32,7 @@ export default function HomePage({ user, message, error, isSubmitting, onLogout 
       const currentYear = today.getFullYear();
 
       try {
+        setDashboardSummary({ totalAmount: 0, receiptCount: 0, recentExpenses: [] });
         const summary = await fetchMonthlySummary(currentYear, currentMonth);
         const totalAmount = summary.grand_total;
 
