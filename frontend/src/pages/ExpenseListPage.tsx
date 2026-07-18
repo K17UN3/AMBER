@@ -19,11 +19,14 @@ export default function ExpenseListPage({ onLogout, isSubmitting }: ExpenseListP
 
   useEffect(() => {
     async function loadExpenses() {
+      setExpenses([]);
+      setError("");
+
       try {
         const data = await fetchExpenses();
         setExpenses(data);
-      } catch (requestError) {
-        setError("支出一覧の読み込みに失敗しました。ログイン状態を確認してください。");
+      } catch {
+        setError("支出一覧の読み込みに失敗しました。");
       } finally {
         setLoading(false);
       }
@@ -44,21 +47,28 @@ export default function ExpenseListPage({ onLogout, isSubmitting }: ExpenseListP
         </button>
       </header>
 
-      {error && <p className={styles.error}>{error}</p>}
+      {error ? <p className={styles.error}>{error}</p> : null}
 
       {loading ? (
         <p className={styles.description}>読み込み中...</p>
       ) : expenses.length === 0 ? (
-        <section className={styles.panel}>
-          <p className={styles.description}>まだ支出がありません。レシートから保存してください。</p>
+        <section className={styles.sectionBlock}>
+          <p className={styles.description}>まだ支出がありません。</p>
         </section>
       ) : (
-        <section className={styles.panel} aria-label="支出一覧">
+        <section className={styles.sectionBlock} aria-label="支出一覧">
           <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "12px" }}>
             {expenses.map((expense) => (
               <li
                 key={expense.id}
+                tabIndex={0}
+                role="button"
                 onClick={() => navigate(`/expenses/${expense.id}`)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    navigate(`/expenses/${expense.id}`);
+                  }
+                }}
                 style={{
                   border: "1px solid #e5e7eb",
                   borderRadius: "12px",
@@ -82,7 +92,7 @@ export default function ExpenseListPage({ onLogout, isSubmitting }: ExpenseListP
         </section>
       )}
 
-      <button type="button" className={styles.buttonSecondary} onClick={() => navigate("/home")}>
+      <button type="button" className={styles.buttonLink} onClick={() => navigate("/home")}>
         ホームへ戻る
       </button>
     </main>

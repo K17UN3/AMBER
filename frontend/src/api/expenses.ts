@@ -1,5 +1,5 @@
 import apiClient from "./client";
-import type { ExpenseSavePayload, SavedExpense } from "../types";
+import type { ExpenseSavePayload, MonthlySummaryResponse, SavedExpense } from "../types";
 
 export async function saveExpense(payload: ExpenseSavePayload) {
   const response = await apiClient.post<SavedExpense>("/expenses/", payload);
@@ -13,5 +13,12 @@ export async function fetchExpenses() {
 
 export async function fetchExpenseDetail(id: number) {
   const response = await apiClient.get<SavedExpense>(`/expenses/${id}/`);
+  return response.data;
+}
+
+export async function fetchMonthlySummary(year: number, month: number) {
+  const response = await apiClient.get<MonthlySummaryResponse>(`/summary/monthly/`, {
+    params: { year, month },
+  });
   return response.data;
 }

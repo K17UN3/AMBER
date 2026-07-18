@@ -20,6 +20,9 @@ export default function ExpenseDetailPage({ onLogout, isSubmitting }: ExpenseDet
 
   useEffect(() => {
     async function loadExpense() {
+      setExpense(null);
+      setError("");
+
       try {
         const id = Number(expenseId);
         if (!Number.isInteger(id)) {
@@ -28,7 +31,7 @@ export default function ExpenseDetailPage({ onLogout, isSubmitting }: ExpenseDet
         const data = await fetchExpenseDetail(id);
         setExpense(data);
       } catch {
-        setError("支出詳細の読み込みに失敗しました。ログイン状態を確認してください。");
+        setError("支出詳細の読み込みに失敗しました。");
       } finally {
         setLoading(false);
       }
@@ -49,12 +52,12 @@ export default function ExpenseDetailPage({ onLogout, isSubmitting }: ExpenseDet
         </button>
       </header>
 
-      {error && <p className={styles.error}>{error}</p>}
+      {error ? <p className={styles.error}>{error}</p> : null}
 
       {loading ? (
         <p className={styles.description}>読み込み中...</p>
       ) : expense ? (
-        <section className={styles.panel}>
+        <section className={styles.sectionBlock}>
           <dl style={{ display: "grid", gap: "12px", margin: 0 }}>
             <div>
               <dt style={{ fontSize: "0.85rem", color: "#6b7280" }}>店名</dt>
@@ -90,7 +93,7 @@ export default function ExpenseDetailPage({ onLogout, isSubmitting }: ExpenseDet
         </section>
       ) : null}
 
-      <button type="button" className={styles.buttonSecondary} onClick={() => navigate("/expenses")}>
+      <button type="button" className={styles.buttonLink} onClick={() => navigate("/expenses")}>
         一覧へ戻る
       </button>
     </main>
