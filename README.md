@@ -123,14 +123,14 @@ OCRで文字を読み取る
 | バックエンド | Python / Django |
 | データベース | SQLite / PostgreSQL |
 | 認証 | Django標準認証機能を利用したセッション認証 |
-| OCR | PaddleOCR |
+| OCR | Tesseract.js（ブラウザ内のWebAssembly / Web Worker） |
 | デプロイ | Vercel（フロントエンド） / Render Web Service（バックエンド） / Render PostgreSQL |
 
 ## 技術構成の理由
 
 - アプリ開発未経験でも、スマホ対応Webアプリなら実装しやすい
 - Djangoで認証、DB、画像アップロード、集計処理をまとめて実装できる
-- OCRは外部APIを使うことで、レシート読み取り機能を実現しやすい
+- OCRはTesseract.jsをブラウザ内で実行し、画像を外部サーバーへ送らず無課金で利用できる
 - Bootstrapを使うことで、画面デザインを短時間で整えやすい
 - 発表時に「レシート登録 → OCR → 保存 → 月次合計反映」の流れを見せやすい
 
@@ -228,13 +228,8 @@ pip freeze > requirements.txt
 ```env
 SECRET_KEY=your-secret-key
 DEBUG=True
-OCR_ENABLED=True
 CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
-PADDLE_PDX_MODEL_SOURCE=BOS
-PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
-PADDLE_OCR_VERSION=PP-OCRv3
-PADDLE_ENABLE_MKLDNN=False
 ```
 
 注意：`.env` や本番環境の接続情報はGitHubにアップロードしないでください。
@@ -264,7 +259,6 @@ Render では `render.yaml` を使って Django API と Render PostgreSQL を定
 |---|---|
 | `SECRET_KEY` | Renderで生成、またはDashboardで設定 |
 | `DEBUG` | 本番では `False` |
-| `OCR_ENABLED` | OCRジョブの受付可否。無課金の本番構成では `False`、Workerを用意した環境では `True` |
 | `DATABASE_URL` | Render PostgreSQL の接続文字列 |
 | `ALLOWED_HOSTS` | `.onrender.com` または利用するバックエンドドメイン |
 | `FRONTEND_ORIGIN` | Vercel のフロントエンドURL |
@@ -274,72 +268,17 @@ Render では `render.yaml` を使って Django API と Render PostgreSQL を定
 | `CSRF_COOKIE_SAMESITE` | 本番では `None` |
 | `SESSION_COOKIE_SECURE` | 本番では `True` |
 | `CSRF_COOKIE_SECURE` | 本番では `True` |
-| `CLOUDINARY_URL` | OCRを有効化するときだけ設定するCloudinary接続URL。APIとWorkerで同じ値を使う |
 
 Render Web Service と Render PostgreSQL が同じ workspace かつ同じ region にある場合は、PostgreSQL の internal connection string を使います。
 別 region や別 workspace の internal connection string は名前解決できないため、同じ region にそろえるか、必要に応じて external connection string を使います。
 
-### OCR Worker: 無課金の本番構成
+### OCR: 無課金のフロントエンド構成
 
-`render.yaml` は有料のBackground Workerを作成せず、`amber-api` の `OCR_ENABLED=False` によって本番のOCR受付を停止します。APIはOCRジョブを作成せず `503 Service Unavailable` を返し、フロントエンドもアップロード操作を無効化するため、処理されないジョブは残りません。
+レシート画像はDjango APIへアップロードせず、Vercelで配信するReactアプリ上のTesseract.jsで解析します。日本語・英語の学習データは初回利用時にブラウザへダウンロードされ、以後はキャッシュが利用されます。OCR用API、共有画像ストレージ、Render Background Worker、外部OCR APIの利用料は不要です。
 
-ローカル開発では `OCR_ENABLED=True` のまま、次のコマンドでWorkerを起動できます。
+複数画像を続けて解析するときは、同じWeb Workerを再利用します。認識した店名・購入日・合計金額・OCR全文と信頼度だけを、ユーザーが内容を確認して支出を保存するときにDjango APIへ送信します。レシート画像そのものは送信・保存しません。
 
-```bash
-cd backend
-python manage.py run_ocr_worker --poll-seconds 2
-```
-
-この構成ではRenderのWorker料金は発生しません。一方、Renderの無料PostgreSQLには有効期限があるため、無課金構成は開発・デモ・評価用途を想定しています。
-
-### 本番でOCRを有効化する手順
-
-本番で継続的にOCRを提供するときは、次の順序で有料のBackground Workerを追加します。
-
-1. Cloudinaryの `CLOUDINARY_URL` を `amber-api` のEnvironmentへ秘密情報として登録する
-2. `render.yaml` の `amber-api` にある `OCR_ENABLED` を `"True"` へ変更する
-3. `render.yaml` の `services` に次のWorker定義を追加する
-4. PRをマージし、Render Blueprintを同期して課金内容を承認する
-5. WorkerがLiveになった後、本番レシートでアップロードからOCR完了までを確認する
-
-```yaml
-  - type: worker
-    name: amber-ocr-worker
-    runtime: python
-    plan: standard
-    region: singapore
-    branch: main
-    autoDeploy: true
-    numInstances: 1
-    buildCommand: pip install -r requirements-worker.txt
-    startCommand: cd backend && python manage.py run_ocr_worker --poll-seconds 2
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.12.4
-      - key: DEBUG
-        value: "False"
-      - key: SECRET_KEY
-        generateValue: true
-      - key: DATABASE_URL
-        fromDatabase:
-          name: amber-postgres-sg
-          property: connectionString
-      - key: CLOUDINARY_URL
-        fromService:
-          type: web
-          name: amber-api
-          envVarKey: CLOUDINARY_URL
-      - key: PADDLE_PDX_MODEL_SOURCE
-        value: BOS
-      - key: PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK
-        value: "True"
-      - key: PADDLE_OCR_VERSION
-        value: PP-OCRv3
-      - key: PADDLE_ENABLE_MKLDNN
-        value: "False"
-```
-
-既存Blueprintの更新では、`sync: false` の新しい秘密情報は自動追加されません。`CLOUDINARY_URL` はBlueprint同期前にRender Dashboardから手動登録してください。Cloudinaryではレシートを `authenticated` アセットとして保存し、OCR時だけ5分間有効な署名付きURLで取得します。APIとWorkerで同じ `CLOUDINARY_URL` を使わない場合、Workerは画像を取得できません。
+初回の学習データ取得にはネットワーク接続が必要です。初回から完全オフラインにする場合は、Tesseract.jsのWorker、WASM、`jpn` / `eng`の`traineddata`を自サイトから配信する構成へ変更してください。
 
 ### Render PostgreSQL 接続確認
 
@@ -477,7 +416,7 @@ Djangoのログイン処理とつなげます。
 |---|---|
 | フロントエンド担当 | 画面作成、CSS調整、スマホ対応 |
 | バックエンド担当 | Djangoの処理、DB、認証 |
-| OCR担当 | PaddleOCRワーカー連携、OCR結果処理 |
+| OCR担当 | Tesseract.js連携、ブラウザ内のOCR結果処理 |
 | DB担当 | モデル設計、マイグレーション、データ保存 |
 | 発表・資料担当 | 発表スライド、デモ準備、README整理 |
 

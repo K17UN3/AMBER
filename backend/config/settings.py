@@ -11,7 +11,6 @@ SECRET_KEY = os.environ.get(
     "django-insecure-local-development-key-change-me",
 )
 DEBUG = os.environ.get("DEBUG", "True").lower() == "true"
-OCR_ENABLED = os.environ.get("OCR_ENABLED", "True").lower() == "true"
 
 def env_list(name, default):
     return [value.strip() for value in os.environ.get(name, default).split(",") if value.strip()]
@@ -93,20 +92,7 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
-MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
-STORAGES = {
-    "default": {
-        "BACKEND": "django.core.files.storage.FileSystemStorage",
-    },
-    "staticfiles": {
-        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
-    },
-}
-if os.environ.get("CLOUDINARY_URL"):
-    STORAGES["default"] = {
-        "BACKEND": "receipts.storage.CloudinaryReceiptStorage",
-    }
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {

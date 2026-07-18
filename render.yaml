@@ -14,8 +14,6 @@ services:
         value: 3.12.4
       - key: DEBUG
         value: "False"
-      - key: OCR_ENABLED
-        value: "False"
       - key: SECRET_KEY
         generateValue: true
       - key: DATABASE_URL

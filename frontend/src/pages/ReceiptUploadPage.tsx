@@ -3,18 +3,12 @@ import type { ChangeEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { saveExpense } from "../api/expenses";
-import {
-  getReceiptAnalysisJob,
-  getReceiptOcrAvailability,
-  startReceiptAnalysis,
-} from "../api/receipts";
-import type { OCRAvailability } from "../api/receipts";
-import type { ExpenseSavePayload, OCRJob } from "../types";
+import { runReceiptOcr, toClientOCRResult } from "../ocr/receiptOcr";
+import type { ExpenseSavePayload, ReceiptOCRResult } from "../types";
 import { readableError } from "../utils/errors";
 import styles from "./ReceiptUploadPage.module.css";
 
 const maxImageSize = 10 * 1024 * 1024;
-const maxPollingRetries = 5;
 const categories = ["食費", "日用品", "交通費", "医療費", "娯楽", "その他"];
 const initialConfirmForm: ExpenseSavePayload = {
   shop_name: "",
@@ -32,40 +26,17 @@ type ReceiptUploadPageProps = {
 export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUploadPageProps) {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const pollingGenerationRef = useRef(0);
-  const [ocrAvailability, setOcrAvailability] = useState<OCRAvailability | null>(null);
+  const analysisGenerationRef = useRef(0);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
-  const [result, setResult] = useState<OCRJob | null>(null);
+  const [result, setResult] = useState<ReceiptOCRResult | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [pollingRetryCount, setPollingRetryCount] = useState(0);
+  const [ocrProgress, setOcrProgress] = useState(0);
+  const [ocrStatus, setOcrStatus] = useState("");
   const [confirmForm, setConfirmForm] = useState<ExpenseSavePayload>(initialConfirmForm);
-
-  useEffect(() => {
-    let isCurrent = true;
-
-    getReceiptOcrAvailability()
-      .then((availability) => {
-        if (isCurrent) {
-          setOcrAvailability(availability);
-        }
-      })
-      .catch((requestError) => {
-        if (isCurrent) {
-          setOcrAvailability({
-            enabled: false,
-            detail: readableError(requestError),
-          });
-        }
-      });
-
-    return () => {
-      isCurrent = false;
-    };
-  }, []);
 
   useEffect(() => {
     if (!selectedFile) {
@@ -79,53 +50,10 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
     return () => URL.revokeObjectURL(objectUrl);
   }, [selectedFile]);
 
-  useEffect(() => {
-    if (!result || !["pending", "processing"].includes(result.status)) {
-      return;
-    }
-
-    const generation = pollingGenerationRef.current;
-    const delay = Math.min(1500 * 2 ** pollingRetryCount, 10000);
-    const timer = window.setTimeout(async () => {
-      try {
-        const nextResult = await getReceiptAnalysisJob(result.id);
-        if (generation !== pollingGenerationRef.current) {
-          return;
-        }
-        setResult(nextResult);
-        setPollingRetryCount(0);
-        setError("");
-        if (nextResult.status === "succeeded") {
-          populateConfirmForm(nextResult);
-          setMessage("OCR解析が完了しました。内容を確認して保存してください。");
-        }
-        if (nextResult.status === "failed") {
-          setError(nextResult.error_message || "OCR解析に失敗しました。もう一度お試しください。");
-        }
-      } catch (requestError) {
-        if (generation !== pollingGenerationRef.current) {
-          return;
-        }
-        if (pollingRetryCount < maxPollingRetries) {
-          setPollingRetryCount((current) => current + 1);
-          setError("解析状況の取得に失敗しました。再接続しています。");
-          return;
-        }
-        setError(`${readableError(requestError)} 画像を選び直して、もう一度お試しください。`);
-        setResult(null);
-      }
-    }, delay);
-
-    return () => window.clearTimeout(timer);
-  }, [result, pollingRetryCount]);
-
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
-    pollingGenerationRef.current += 1;
-    setIsAnalyzing(false);
-    setResult(null);
-    setMessage("");
-    setError("");
+    analysisGenerationRef.current += 1;
+    resetAnalysis();
 
     if (!file) {
       setSelectedFile(null);
@@ -148,41 +76,53 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
   }
 
   async function handleAnalyze() {
-    if (!ocrAvailability?.enabled) {
-      setError(
-        ocrAvailability?.detail ||
-          "OCR解析は現在利用できません。時間をおいて、もう一度お試しください。",
-      );
-      return;
-    }
-
     if (!selectedFile) {
       setError("レシート画像を選択してください。");
       return;
     }
 
-    const generation = pollingGenerationRef.current + 1;
-    pollingGenerationRef.current = generation;
+    const generation = analysisGenerationRef.current + 1;
+    analysisGenerationRef.current = generation;
     setIsAnalyzing(true);
     setError("");
     setMessage("");
     setResult(null);
-    setPollingRetryCount(0);
+    setOcrProgress(0);
+    setOcrStatus("OCRを準備しています");
 
     try {
-      const analyzedResult = await startReceiptAnalysis(selectedFile);
-      if (generation !== pollingGenerationRef.current) {
+      const analyzedResult = await runReceiptOcr(selectedFile, ({ status, progress }) => {
+        if (generation !== analysisGenerationRef.current) {
+          return;
+        }
+        setOcrStatus(toJapaneseOcrStatus(status));
+        setOcrProgress(progress);
+      });
+      if (generation !== analysisGenerationRef.current) {
         return;
       }
+
       setResult(analyzedResult);
-      setMessage("OCR解析を受け付けました。解析が完了するまでお待ちください。");
+      setConfirmForm({
+        shop_name: analyzedResult.shop_name ?? "",
+        purchased_at: analyzedResult.purchased_at ?? "",
+        total_amount: analyzedResult.total_amount ?? 0,
+        category: "その他",
+        raw_ocr_text: analyzedResult.raw_ocr_text,
+      });
+      setOcrProgress(1);
+      setMessage("ブラウザ内のOCR解析が完了しました。内容を確認して保存してください。");
     } catch (requestError) {
-      if (generation !== pollingGenerationRef.current) {
-        return;
+      if (generation === analysisGenerationRef.current) {
+        const detail = requestError instanceof Error ? requestError.message : "";
+        setError(
+          detail
+            ? `OCR解析に失敗しました（${detail}）。画像を選び直して、もう一度お試しください。`
+            : "OCR解析に失敗しました。画像を選び直して、もう一度お試しください。",
+        );
       }
-      setError(readableError(requestError));
     } finally {
-      if (generation === pollingGenerationRef.current) {
+      if (generation === analysisGenerationRef.current) {
         setIsAnalyzing(false);
       }
     }
@@ -200,7 +140,10 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
     setMessage("");
 
     try {
-      const savedExpense = await saveExpense({ ...confirmForm, ocr_job_id: result?.id });
+      const payload = result
+        ? { ...confirmForm, ocr_result: toClientOCRResult(result) }
+        : confirmForm;
+      const savedExpense = await saveExpense(payload);
       navigate("/receipts/complete", { state: { expense: savedExpense } });
     } catch (requestError) {
       setError(readableError(requestError));
@@ -209,34 +152,27 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
     }
   }
 
-  function clearSelection() {
-    pollingGenerationRef.current += 1;
+  function resetAnalysis() {
     setIsAnalyzing(false);
-    setSelectedFile(null);
     setResult(null);
-    setPollingRetryCount(0);
     setConfirmForm(initialConfirmForm);
+    setOcrProgress(0);
+    setOcrStatus("");
     setMessage("");
     setError("");
+  }
+
+  function clearSelection() {
+    analysisGenerationRef.current += 1;
+    setSelectedFile(null);
+    resetAnalysis();
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   }
 
   const hasSelection = selectedFile !== null;
-  const isOcrAvailable = ocrAvailability?.enabled === true;
-  const isOcrPending = result?.status === "pending" || result?.status === "processing";
-  const isBusy = isSubmitting || isAnalyzing || isSaving || isOcrPending;
-
-  function populateConfirmForm(ocrJob: OCRJob) {
-    setConfirmForm({
-      shop_name: ocrJob.shop_name ?? "",
-      purchased_at: ocrJob.purchased_at ?? "",
-      total_amount: ocrJob.total_amount ?? 0,
-      category: "その他",
-      raw_ocr_text: ocrJob.raw_ocr_text,
-    });
-  }
+  const isBusy = isSubmitting || isAnalyzing || isSaving;
 
   return (
     <main className={styles.shell}>
@@ -262,30 +198,21 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
 
       {message && <p className={styles.notice}>{message}</p>}
       {error && <p className={styles.error}>{error}</p>}
-      {ocrAvailability === null && (
-        <p className={styles.notice}>OCR機能の利用可否を確認しています。</p>
-      )}
-      {ocrAvailability && !ocrAvailability.enabled && (
-        <p className={styles.warning}>{ocrAvailability.detail}</p>
-      )}
 
       <section className={styles.uploadPanel} aria-label="レシート画像アップロード">
-        <label
-          className={`${styles.dropArea} ${!isOcrAvailable ? styles.dropAreaDisabled : ""}`}
-          aria-disabled={!isOcrAvailable}
-        >
+        <label className={styles.dropArea}>
           <span className={styles.dropIcon} aria-hidden="true">
             +
           </span>
           <strong>{hasSelection ? selectedFile.name : "レシート画像を選択"}</strong>
-          <small>スマホではカメラ起動、PCでは画像ファイル選択に対応しています。</small>
+          <small>画像はサーバーへ送信せず、このブラウザ内だけでOCR解析します。</small>
           <input
             ref={fileInputRef}
             type="file"
             accept="image/*"
             capture="environment"
             onChange={handleFileChange}
-            disabled={!isOcrAvailable}
+            disabled={isAnalyzing}
           />
         </label>
 
@@ -306,9 +233,9 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
           type="button"
           className={styles.primaryButton}
           onClick={handleAnalyze}
-          disabled={!isOcrAvailable || !hasSelection || isBusy}
+          disabled={!hasSelection || isBusy}
         >
-          {isAnalyzing || isOcrPending ? "解析中..." : "OCR解析へ進む"}
+          {isAnalyzing ? "解析中..." : "OCR解析へ進む"}
         </button>
         <button
           type="button"
@@ -320,21 +247,25 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
         </button>
       </section>
 
-      {(isAnalyzing || isOcrPending) && (
+      {isAnalyzing && (
         <section className={styles.loadingPanel} aria-live="polite">
           <span className={styles.spinner} aria-hidden="true" />
-          <strong>{result?.status === "processing" ? "画像を読み取っています" : "OCR解析を待機しています"}</strong>
+          <strong>{ocrStatus}</strong>
+          <progress value={ocrProgress} max={1} aria-label="OCR解析の進捗" />
+          <small>{Math.round(ocrProgress * 100)}%</small>
         </section>
       )}
 
-      {result?.status === "succeeded" && (
+      {result && (
         <section className={styles.resultPanel} aria-labelledby="receipt-result-title">
           <div className={styles.resultHeading}>
             <div>
               <p className={styles.eyebrow}>確認・修正</p>
               <h2 id="receipt-result-title">支出として保存</h2>
             </div>
-            <span>{result.image?.name ?? selectedFile?.name ?? "-"}</span>
+            <span>
+              {selectedFile?.name ?? "-"}・信頼度 {Math.round(result.confidence)}%
+            </span>
           </div>
 
           <div className={styles.formGrid}>
@@ -435,4 +366,15 @@ function validateConfirmForm(form: ExpenseSavePayload) {
   }
 
   return "";
+}
+
+function toJapaneseOcrStatus(status: string) {
+  const labels: Record<string, string> = {
+    "loading tesseract core": "OCRエンジンを読み込んでいます",
+    "initializing tesseract": "OCRエンジンを初期化しています",
+    "loading language traineddata": "日本語・英語モデルを読み込んでいます",
+    "initializing api": "文字認識を準備しています",
+    "recognizing text": "レシートの文字を読み取っています",
+  };
+  return labels[status] ?? "OCRを準備しています";
 }
