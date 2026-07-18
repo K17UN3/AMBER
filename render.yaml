@@ -36,6 +36,43 @@ services:
         value: "True"
       - key: CSRF_COOKIE_SECURE
         value: "True"
+      - key: CLOUDINARY_URL
+        sync: false
+
+  - type: worker
+    name: amber-ocr-worker
+    runtime: python
+    plan: standard
+    region: singapore
+    branch: main
+    autoDeploy: true
+    numInstances: 1
+    buildCommand: pip install -r requirements-worker.txt
+    startCommand: cd backend && python manage.py run_ocr_worker --poll-seconds 2
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.4
+      - key: DEBUG
+        value: "False"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: amber-postgres-sg
+          property: connectionString
+      - key: CLOUDINARY_URL
+        fromService:
+          type: web
+          name: amber-api
+          envVarKey: CLOUDINARY_URL
+      - key: PADDLE_PDX_MODEL_SOURCE
+        value: BOS
+      - key: PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK
+        value: "True"
+      - key: PADDLE_OCR_VERSION
+        value: PP-OCRv3
+      - key: PADDLE_ENABLE_MKLDNN
+        value: "False"
 
 databases:
   - name: amber-postgres-sg

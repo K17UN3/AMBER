@@ -231,6 +231,9 @@ DEBUG=True
 CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 PADDLE_PDX_MODEL_SOURCE=BOS
+PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
+PADDLE_OCR_VERSION=PP-OCRv3
+PADDLE_ENABLE_MKLDNN=False
 ```
 
 注意：`.env` や本番環境の接続情報はGitHubにアップロードしないでください。
@@ -269,9 +272,16 @@ Render では `render.yaml` を使って Django API と Render PostgreSQL を定
 | `CSRF_COOKIE_SAMESITE` | 本番では `None` |
 | `SESSION_COOKIE_SECURE` | 本番では `True` |
 | `CSRF_COOKIE_SECURE` | 本番では `True` |
+| `CLOUDINARY_URL` | Cloudinaryの接続URL。レシート原本を非公開で共有するためAPIとWorkerで同じ値を使う |
 
 Render Web Service と Render PostgreSQL が同じ workspace かつ同じ region にある場合は、PostgreSQL の internal connection string を使います。
 別 region や別 workspace の internal connection string は名前解決できないため、同じ region にそろえるか、必要に応じて external connection string を使います。
+
+### OCR Worker: Render Background Worker
+
+`render.yaml` は `amber-ocr-worker` を Standard（2 GB RAM / 1 CPU）、1インスタンスで定義します。Web APIは `requirements.txt`、WorkerはPaddleOCRを含む `requirements-worker.txt` をインストールするため、APIのビルドと常駐メモリにOCR依存を持ち込みません。
+
+既存Blueprintの更新では `sync: false` の新しい秘密情報は自動追加されません。初回同期前に `amber-api` のEnvironmentへ `CLOUDINARY_URL` を手動登録してください。WorkerはAPIサービスの同名環境変数を参照します。Cloudinaryではレシートを `authenticated` アセットとして保存し、OCR時だけ5分間有効な署名付きURLで取得します。
 
 ### Render PostgreSQL 接続確認
 

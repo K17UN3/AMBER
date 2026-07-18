@@ -1,4 +1,5 @@
 from datetime import timedelta
+from io import BytesIO
 import os
 
 from django.contrib.auth import get_user_model
@@ -9,7 +10,8 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from .models import OCRJob
-from .services import extract_total_amount
+from .services import extract_shop_name, extract_total_amount
+from .storage import CloudinaryReceiptStorage
 from .worker import _download_image_to_temporary_file, process_next_ocr_job
 
 User = get_user_model()
@@ -203,5 +205,51 @@ class ReceiptAnalyzeApiTests(APITestCase):
 class ReceiptParsingTests(SimpleTestCase):
     def test_extract_total_amount_supports_comma_and_plain_integer_amounts(self):
         self.assertEqual(extract_total_amount("合計 1280"), 1280)
+        self.assertEqual(extract_total_amount("合 計 ¥3,245"), 3245)
         self.assertEqual(extract_total_amount("合計 1,280"), 1280)
         self.assertEqual(extract_total_amount("合計 980"), 980)
+
+    def test_extract_total_amount_handles_split_and_full_width_ocr_lines(self):
+        self.assertEqual(extract_total_amount("３．２４5\n預／現計\n4点"), 3245)
+
+    def test_extract_shop_name_prefers_confident_non_address_line(self):
+        lines = [
+            {"text": "ＭＡＲUてＡＭＡ", "confidence": 0.71},
+            {"text": "La Fraise", "confidence": 0.99},
+            {"text": "札幌市中央区南1条西2丁目", "confidence": 1.0},
+            {"text": "1,400外", "confidence": 1.0},
+        ]
+
+        self.assertEqual(extract_shop_name(lines), "La Fraise")
+
+
+class CloudinaryReceiptStorageTests(SimpleTestCase):
+    def setUp(self):
+        self.storage = CloudinaryReceiptStorage()
+
+    def test_uploads_receipt_as_authenticated_asset(self):
+        from unittest.mock import patch
+
+        with patch(
+            "receipts.storage.cloudinary.uploader.upload",
+            return_value={"public_id": "amber/receipts/asset-id", "format": "jpg"},
+        ) as upload:
+            saved_name = self.storage._save("receipts/original.jpg", BytesIO(b"receipt"))
+
+        self.assertEqual(saved_name, "amber/receipts/asset-id.jpg")
+        self.assertEqual(upload.call_args.kwargs["type"], "authenticated")
+        self.assertFalse(upload.call_args.kwargs["overwrite"])
+
+    def test_open_uses_short_lived_authenticated_download_url(self):
+        from unittest.mock import patch
+
+        with patch(
+            "receipts.storage.cloudinary.utils.private_download_url",
+            return_value="https://api.cloudinary.example/private",
+        ) as private_url:
+            with patch("receipts.storage.urlopen", return_value=BytesIO(b"receipt bytes")):
+                opened = self.storage._open("amber/receipts/asset-id.jpg")
+
+        self.assertEqual(opened.read(), b"receipt bytes")
+        self.assertEqual(private_url.call_args.args[:2], ("amber/receipts/asset-id", "jpg"))
+        self.assertEqual(private_url.call_args.kwargs["type"], "authenticated")
