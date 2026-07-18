@@ -42,6 +42,7 @@ class ReceiptAnalyzeApiTests(APITestCase):
 
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.data["status"], OCRJob.Status.PENDING)
+        self.assertIsNone(response.data["category"])
         self.assertEqual(response.data["image"]["name"], "receipt.jpg")
         self.assertEqual(response.data["image"]["content_type"], "image/jpeg")
         self.assertEqual(OCRJob.objects.count(), 1)
@@ -78,9 +79,9 @@ class ReceiptAnalyzeApiTests(APITestCase):
             file_size=5,
         )
         expected = {
-            "raw_ocr_text": "アンバーマート\n2026/07/11\n合計 1,280",
-            "ocr_lines": [{"text": "アンバーマート", "confidence": 0.99, "coordinates": [[0, 0], [1, 1]]}],
-            "shop_name": "アンバーマート",
+            "raw_ocr_text": "アンバースーパー\n2026/07/11\n合計 1,280",
+            "ocr_lines": [{"text": "アンバースーパー", "confidence": 0.99, "coordinates": [[0, 0], [1, 1]]}],
+            "shop_name": "アンバースーパー",
             "purchased_at": "2026-07-11",
             "total_amount": 1280,
         }
@@ -93,11 +94,16 @@ class ReceiptAnalyzeApiTests(APITestCase):
 
         job.refresh_from_db()
         self.assertEqual(job.status, OCRJob.Status.SUCCEEDED)
-        self.assertEqual(job.shop_name, "アンバーマート")
+        self.assertEqual(job.shop_name, "アンバースーパー")
         self.assertEqual(job.purchased_at.isoformat(), "2026-07-11")
         self.assertEqual(job.total_amount, 1280)
         self.assertEqual(job.ocr_lines, expected["ocr_lines"])
         self.assertEqual(job.attempt_count, 1)
+        self.assertEqual(job.category.name, "食費")
+
+        self.client.force_authenticate(self.user)
+        response = self.client.get(reverse("ocr-job-detail", kwargs={"job_id": job.id}))
+        self.assertEqual(response.data["category"], "食費")
 
     def test_worker_recovers_a_stale_job_within_retry_limit(self):
         job = OCRJob.objects.create(

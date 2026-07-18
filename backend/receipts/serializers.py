@@ -5,6 +5,7 @@ from .models import OCRJob
 
 class OCRJobSerializer(serializers.ModelSerializer):
     image = serializers.SerializerMethodField()
+    category = serializers.SlugRelatedField(slug_field="name", read_only=True)
 
     class Meta:
         model = OCRJob
@@ -16,6 +17,7 @@ class OCRJobSerializer(serializers.ModelSerializer):
             "total_amount",
             "raw_ocr_text",
             "ocr_lines",
+            "category",
             "error_message",
             "image",
             "created_at",

@@ -1,5 +1,10 @@
 import apiClient from "./client";
-import type { ExpenseSavePayload, MonthlySummaryResponse, SavedExpense } from "../types";
+import type { Category, ExpenseSavePayload, MonthlySummaryResponse, SavedExpense } from "../types";
+
+export async function fetchCategories() {
+  const response = await apiClient.get<Category[]>("/categories/");
+  return response.data;
+}
 
 export async function saveExpense(payload: ExpenseSavePayload) {
   const response = await apiClient.post<SavedExpense>("/expenses/", payload);

@@ -6,9 +6,17 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Expense
-from .serializers import ExpenseSerializer
+from .models import Category, Expense
+from .serializers import CategorySerializer, ExpenseSerializer
 from receipts.models import OCRCorrectionHistory, OCRJob
+
+
+class CategoryListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        serializer = CategorySerializer(Category.objects.all(), many=True)
+        return Response(serializer.data)
 
 
 class ExpenseListCreateView(APIView):
@@ -43,12 +51,13 @@ class ExpenseListCreateView(APIView):
                         "purchased_at": ocr_job.purchased_at.isoformat() if ocr_job.purchased_at else None,
                         "total_amount": ocr_job.total_amount,
                         "raw_ocr_text": ocr_job.raw_ocr_text,
+                        "category": ocr_job.category.name if ocr_job.category else "その他",
                     },
                     saved_values={
                         "shop_name": expense.shop_name,
                         "purchased_at": expense.purchased_at.isoformat(),
                         "total_amount": expense.total_amount,
-                        "category": expense.category,
+                        "category": expense.category.name,
                         "raw_ocr_text": expense.raw_ocr_text,
                     },
                 )
@@ -83,9 +92,9 @@ class MonthlyExpenseSummaryView(APIView):
 
         grand_total = expenses.aggregate(total=Sum("total_amount"))["total"] or 0
         categories = (
-            expenses.values("category")
+            expenses.values("category__name")
             .annotate(total=Sum("total_amount"))
-            .order_by("category")
+            .order_by("category__name")
         )
 
         return Response(
@@ -94,7 +103,7 @@ class MonthlyExpenseSummaryView(APIView):
                 "month": month,
                 "grand_total": grand_total,
                 "categories": [
-                    {"category": item["category"], "total": item["total"] or 0}
+                    {"category": item["category__name"], "total": item["total"] or 0}
                     for item in categories
                 ],
             }

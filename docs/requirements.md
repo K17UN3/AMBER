@@ -326,6 +326,7 @@ Django標準のUserモデルを利用する。
 
 | メソッド | エンドポイント | 内容 |
 |---|---|---|
+| GET | `/api/categories/` | 選択可能なカテゴリー一覧取得 |
 | GET | `/api/expenses/` | 支出一覧取得 |
 | POST | `/api/expenses/` | 支出データ保存 |
 | GET | `/api/expenses/<int:id>/` | 支出詳細取得 |

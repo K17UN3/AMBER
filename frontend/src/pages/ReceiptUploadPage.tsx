@@ -2,15 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { saveExpense } from "../api/expenses";
+import { fetchCategories, saveExpense } from "../api/expenses";
 import { getReceiptAnalysisJob, startReceiptAnalysis } from "../api/receipts";
-import type { ExpenseSavePayload, OCRJob } from "../types";
+import CategorySelect from "../components/CategorySelect";
+import type { Category, ExpenseSavePayload, OCRJob } from "../types";
 import { readableError } from "../utils/errors";
 import styles from "./ReceiptUploadPage.module.css";
 
 const maxImageSize = 10 * 1024 * 1024;
 const maxPollingRetries = 5;
-const categories = ["食費", "日用品", "交通費", "医療費", "娯楽", "その他"];
 const initialConfirmForm: ExpenseSavePayload = {
   shop_name: "",
   purchased_at: "",
@@ -33,10 +33,35 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
   const [result, setResult] = useState<OCRJob | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [categoryError, setCategoryError] = useState("");
+  const [categories, setCategories] = useState<Category[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [pollingRetryCount, setPollingRetryCount] = useState(0);
   const [confirmForm, setConfirmForm] = useState<ExpenseSavePayload>(initialConfirmForm);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadCategories() {
+      try {
+        const categoryList = await fetchCategories();
+        if (active) {
+          setCategories(categoryList);
+          setCategoryError("");
+        }
+      } catch {
+        if (active) {
+          setCategoryError("カテゴリー一覧の読み込みに失敗しました。画面を再読み込みしてください。");
+        }
+      }
+    }
+
+    void loadCategories();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!selectedFile) {
@@ -195,7 +220,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
       shop_name: ocrJob.shop_name ?? "",
       purchased_at: ocrJob.purchased_at ?? "",
       total_amount: ocrJob.total_amount ?? 0,
-      category: "その他",
+      category: ocrJob.category ?? "その他",
       raw_ocr_text: ocrJob.raw_ocr_text,
     });
   }
@@ -224,6 +249,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
 
       {message && <p className={styles.notice}>{message}</p>}
       {error && <p className={styles.error}>{error}</p>}
+      {categoryError && <p className={styles.error}>{categoryError}</p>}
 
       <section className={styles.uploadPanel} aria-label="レシート画像アップロード">
         <label className={styles.dropArea}>
@@ -332,18 +358,13 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
 
             <label>
               カテゴリー
-              <select
+              <CategorySelect
+                categories={categories}
                 value={confirmForm.category}
-                onChange={(event) =>
-                  setConfirmForm((current) => ({ ...current, category: event.target.value }))
+                onChange={(category) =>
+                  setConfirmForm((current) => ({ ...current, category }))
                 }
-              >
-                {categories.map((category) => (
-                  <option key={category} value={category}>
-                    {category}
-                  </option>
-                ))}
-              </select>
+              />
             </label>
 
             <label className={styles.fullWidth}>
@@ -363,7 +384,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
             type="button"
             className={styles.saveButton}
             onClick={handleSave}
-            disabled={isSaving}
+            disabled={isSaving || categories.length === 0}
           >
             {isSaving ? "保存中..." : "支出として保存"}
           </button>

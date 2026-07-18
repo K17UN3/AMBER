@@ -31,6 +31,11 @@ export type DashboardSummary = {
   recentExpenses: RecentExpense[];
 };
 
+export type Category = {
+  id: number;
+  name: string;
+};
+
 export type OCRJob = {
   id: string;
   status: "pending" | "processing" | "succeeded" | "failed";
@@ -38,6 +43,7 @@ export type OCRJob = {
   purchased_at: string | null;
   total_amount: number | null;
   raw_ocr_text: string;
+  category: string | null;
   ocr_lines: Array<{
     text: string;
     confidence: number | null;

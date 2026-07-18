@@ -28,6 +28,13 @@ class OCRJob(models.Model):
     total_amount = models.PositiveIntegerField(null=True, blank=True)
     raw_ocr_text = models.TextField(blank=True)
     ocr_lines = models.JSONField(default=list, blank=True)
+    category = models.ForeignKey(
+        "expenses.Category",
+        on_delete=models.SET_NULL,
+        related_name="ocr_jobs",
+        null=True,
+        blank=True,
+    )
     error_message = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)

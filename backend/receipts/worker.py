@@ -8,6 +8,8 @@ from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
 
+from expenses.services import classify_category
+
 from .models import OCRJob
 from .services import OCRProcessingError, analyze_receipt
 
@@ -42,6 +44,10 @@ def process_next_ocr_job():
     try:
         temporary_path = _download_image_to_temporary_file(job)
         result = analyze_receipt(temporary_path)
+        category = classify_category(
+            result["shop_name"] or "",
+            result["raw_ocr_text"],
+        )
     except Exception as error:
         _mark_job_failed(job, error)
         return True
@@ -58,6 +64,7 @@ def process_next_ocr_job():
     job.shop_name = result["shop_name"] or ""
     job.purchased_at = result["purchased_at"] or None
     job.total_amount = result["total_amount"]
+    job.category = category
     job.completed_at = timezone.now()
     job.save(
         update_fields=[
@@ -67,6 +74,7 @@ def process_next_ocr_job():
             "shop_name",
             "purchased_at",
             "total_amount",
+            "category",
             "completed_at",
         ]
     )
