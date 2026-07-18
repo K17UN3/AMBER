@@ -1,4 +1,5 @@
 from datetime import timedelta
+import os
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -9,7 +10,7 @@ from rest_framework.test import APITestCase
 
 from .models import OCRJob
 from .services import extract_total_amount
-from .worker import process_next_ocr_job
+from .worker import _download_image_to_temporary_file, process_next_ocr_job
 
 User = get_user_model()
 
@@ -158,6 +159,24 @@ class ReceiptAnalyzeApiTests(APITestCase):
 
         job.refresh_from_db()
         self.assertEqual(job.status, OCRJob.Status.FAILED)
+
+    def test_temporary_file_is_removed_when_download_copy_fails(self):
+        job = OCRJob.objects.create(
+            user=self.user,
+            image=SimpleUploadedFile("receipt.jpg", b"image", content_type="image/jpeg"),
+            original_filename="receipt.jpg",
+            content_type="image/jpeg",
+            file_size=5,
+        )
+
+        from unittest.mock import patch
+
+        with patch("receipts.worker.shutil.copyfileobj", side_effect=OSError("copy failed")):
+            with patch("receipts.worker.os.unlink", wraps=os.unlink) as unlink:
+                with self.assertRaises(OSError):
+                    _download_image_to_temporary_file(job)
+
+        self.assertTrue(any(str(call.args[0]).endswith(".jpg") for call in unlink.call_args_list))
 
     def test_analyze_rejects_missing_image(self):
         self.client.force_authenticate(self.user)

@@ -90,9 +90,19 @@ def _recover_stale_jobs(now):
 
 def _download_image_to_temporary_file(job):
     suffix = Path(job.original_filename).suffix or ".jpg"
-    with job.image.open("rb") as source, tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temporary_file:
-        shutil.copyfileobj(source, temporary_file)
-        return temporary_file.name
+    temporary_path = None
+    try:
+        with job.image.open("rb") as source, tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temporary_file:
+            temporary_path = temporary_file.name
+            shutil.copyfileobj(source, temporary_file)
+        return temporary_path
+    except Exception:
+        if temporary_path:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+        raise
 
 
 def _mark_job_failed(job, error):

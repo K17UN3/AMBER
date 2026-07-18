@@ -27,6 +27,7 @@ type ReceiptUploadPageProps = {
 export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUploadPageProps) {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pollingGenerationRef = useRef(0);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
   const [result, setResult] = useState<OCRJob | null>(null);
@@ -54,10 +55,14 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
       return;
     }
 
+    const generation = pollingGenerationRef.current;
     const delay = Math.min(1500 * 2 ** pollingRetryCount, 10000);
     const timer = window.setTimeout(async () => {
       try {
         const nextResult = await getReceiptAnalysisJob(result.id);
+        if (generation !== pollingGenerationRef.current) {
+          return;
+        }
         setResult(nextResult);
         setPollingRetryCount(0);
         if (nextResult.status === "succeeded") {
@@ -68,6 +73,9 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
           setError(nextResult.error_message || "OCR解析に失敗しました。もう一度お試しください。");
         }
       } catch (requestError) {
+        if (generation !== pollingGenerationRef.current) {
+          return;
+        }
         if (pollingRetryCount < maxPollingRetries) {
           setPollingRetryCount((current) => current + 1);
           setError("解析状況の取得に失敗しました。再接続しています。");
@@ -83,6 +91,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
+    pollingGenerationRef.current += 1;
     setResult(null);
     setMessage("");
     setError("");
@@ -118,6 +127,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
     setMessage("");
     setResult(null);
     setPollingRetryCount(0);
+    pollingGenerationRef.current += 1;
 
     try {
       const analyzedResult = await startReceiptAnalysis(selectedFile);
@@ -152,6 +162,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
   }
 
   function clearSelection() {
+    pollingGenerationRef.current += 1;
     setSelectedFile(null);
     setResult(null);
     setPollingRetryCount(0);
