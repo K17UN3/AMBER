@@ -49,6 +49,7 @@ class MonthlyExpenseSummaryView(APIView):
             purchased_at__year=year,
             purchased_at__month=month,
         )
+
         grand_total = expenses.aggregate(total=Sum("total_amount"))["total"] or 0
         categories = (
             expenses.values("category")
