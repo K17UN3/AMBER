@@ -1,10 +1,27 @@
+import os
+from importlib import reload
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
-from django.test import override_settings
+from django.test import SimpleTestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient, APITestCase
 
 
 User = get_user_model()
+
+
+class SettingsTests(SimpleTestCase):
+    def test_vercel_frontend_defaults_are_allowed_for_csrf_and_cors(self):
+        with patch.dict(os.environ, {"FRONTEND_ORIGIN": "https://amber-app.vercel.app"}, clear=False):
+            import config.settings as settings_module
+
+            reloaded_settings = reload(settings_module)
+
+            self.assertIn("https://amber-app.vercel.app", reloaded_settings.CORS_ALLOWED_ORIGINS)
+            self.assertIn(r"^https://.*\.vercel\.app$", reloaded_settings.CORS_ALLOWED_ORIGIN_REGEXES)
+            self.assertIn("https://amber-app.vercel.app", reloaded_settings.CSRF_TRUSTED_ORIGINS)
+            self.assertIn("https://*.vercel.app", reloaded_settings.CSRF_TRUSTED_ORIGINS)
 
 
 @override_settings(ROOT_URLCONF="config.urls")
