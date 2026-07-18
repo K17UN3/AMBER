@@ -4,7 +4,7 @@ from django.urls import path
 
 from accounts.views import CsrfTokenView, CurrentUserView, LoginView, LogoutView, RegisterView
 from expenses.views import ExpenseDetailView, ExpenseListCreateView, MonthlyExpenseSummaryView
-from receipts.views import OCRJobDetailView, ReceiptAnalyzeView
+from receipts.views import OCRAvailabilityView, OCRJobDetailView, ReceiptAnalyzeView
 
 
 def health_check(_request):
@@ -19,6 +19,7 @@ urlpatterns = [
     path("api/auth/register/", RegisterView.as_view(), name="auth-register"),
     path("api/auth/login/", LoginView.as_view(), name="auth-login"),
     path("api/auth/logout/", LogoutView.as_view(), name="auth-logout"),
+    path("api/receipts/ocr-availability/", OCRAvailabilityView.as_view(), name="ocr-availability"),
     path("api/receipts/analyze/", ReceiptAnalyzeView.as_view(), name="receipt-analyze"),
     path("api/receipts/ocr-jobs/<uuid:job_id>/", OCRJobDetailView.as_view(), name="ocr-job-detail"),
     path("api/expenses/<int:pk>/", ExpenseDetailView.as_view(), name="expense-detail"),

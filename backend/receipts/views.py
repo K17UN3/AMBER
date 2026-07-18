@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework import status
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
@@ -8,6 +9,21 @@ from .models import OCRJob
 from .serializers import OCRJobSerializer
 
 MAX_IMAGE_SIZE = 10 * 1024 * 1024
+OCR_UNAVAILABLE_MESSAGE = (
+    "OCR解析は現在利用できません。Background Workerを有効化してから、もう一度お試しください。"
+)
+
+
+class OCRAvailabilityView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(
+            {
+                "enabled": settings.OCR_ENABLED,
+                "detail": "" if settings.OCR_ENABLED else OCR_UNAVAILABLE_MESSAGE,
+            }
+        )
 
 
 class ReceiptAnalyzeView(APIView):
@@ -15,6 +31,12 @@ class ReceiptAnalyzeView(APIView):
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
+        if not settings.OCR_ENABLED:
+            return Response(
+                {"detail": OCR_UNAVAILABLE_MESSAGE},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
         image = request.FILES.get("image")
         if image is None:
             return Response(

@@ -1,6 +1,16 @@
 import apiClient from "./client";
 import type { OCRJob } from "../types";
 
+export type OCRAvailability = {
+  enabled: boolean;
+  detail: string;
+};
+
+export async function getReceiptOcrAvailability() {
+  const response = await apiClient.get<OCRAvailability>("/receipts/ocr-availability/");
+  return response.data;
+}
+
 export async function startReceiptAnalysis(image: File) {
   const formData = new FormData();
   formData.append("image", image);

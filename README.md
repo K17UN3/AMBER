@@ -228,6 +228,7 @@ pip freeze > requirements.txt
 ```env
 SECRET_KEY=your-secret-key
 DEBUG=True
+OCR_ENABLED=True
 CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 PADDLE_PDX_MODEL_SOURCE=BOS
@@ -263,6 +264,7 @@ Render では `render.yaml` を使って Django API と Render PostgreSQL を定
 |---|---|
 | `SECRET_KEY` | Renderで生成、またはDashboardで設定 |
 | `DEBUG` | 本番では `False` |
+| `OCR_ENABLED` | OCRジョブの受付可否。無課金の本番構成では `False`、Workerを用意した環境では `True` |
 | `DATABASE_URL` | Render PostgreSQL の接続文字列 |
 | `ALLOWED_HOSTS` | `.onrender.com` または利用するバックエンドドメイン |
 | `FRONTEND_ORIGIN` | Vercel のフロントエンドURL |
@@ -272,16 +274,72 @@ Render では `render.yaml` を使って Django API と Render PostgreSQL を定
 | `CSRF_COOKIE_SAMESITE` | 本番では `None` |
 | `SESSION_COOKIE_SECURE` | 本番では `True` |
 | `CSRF_COOKIE_SECURE` | 本番では `True` |
-| `CLOUDINARY_URL` | Cloudinaryの接続URL。レシート原本を非公開で共有するためAPIとWorkerで同じ値を使う |
+| `CLOUDINARY_URL` | OCRを有効化するときだけ設定するCloudinary接続URL。APIとWorkerで同じ値を使う |
 
 Render Web Service と Render PostgreSQL が同じ workspace かつ同じ region にある場合は、PostgreSQL の internal connection string を使います。
 別 region や別 workspace の internal connection string は名前解決できないため、同じ region にそろえるか、必要に応じて external connection string を使います。
 
-### OCR Worker: Render Background Worker
+### OCR Worker: 無課金の本番構成
 
-`render.yaml` は `amber-ocr-worker` を Standard（2 GB RAM / 1 CPU）、1インスタンスで定義します。Web APIは `requirements.txt`、WorkerはPaddleOCRを含む `requirements-worker.txt` をインストールするため、APIのビルドと常駐メモリにOCR依存を持ち込みません。
+`render.yaml` は有料のBackground Workerを作成せず、`amber-api` の `OCR_ENABLED=False` によって本番のOCR受付を停止します。APIはOCRジョブを作成せず `503 Service Unavailable` を返し、フロントエンドもアップロード操作を無効化するため、処理されないジョブは残りません。
 
-既存Blueprintの更新では `sync: false` の新しい秘密情報は自動追加されません。初回同期前に `amber-api` のEnvironmentへ `CLOUDINARY_URL` を手動登録してください。WorkerはAPIサービスの同名環境変数を参照します。Cloudinaryではレシートを `authenticated` アセットとして保存し、OCR時だけ5分間有効な署名付きURLで取得します。
+ローカル開発では `OCR_ENABLED=True` のまま、次のコマンドでWorkerを起動できます。
+
+```bash
+cd backend
+python manage.py run_ocr_worker --poll-seconds 2
+```
+
+この構成ではRenderのWorker料金は発生しません。一方、Renderの無料PostgreSQLには有効期限があるため、無課金構成は開発・デモ・評価用途を想定しています。
+
+### 本番でOCRを有効化する手順
+
+本番で継続的にOCRを提供するときは、次の順序で有料のBackground Workerを追加します。
+
+1. Cloudinaryの `CLOUDINARY_URL` を `amber-api` のEnvironmentへ秘密情報として登録する
+2. `render.yaml` の `amber-api` にある `OCR_ENABLED` を `"True"` へ変更する
+3. `render.yaml` の `services` に次のWorker定義を追加する
+4. PRをマージし、Render Blueprintを同期して課金内容を承認する
+5. WorkerがLiveになった後、本番レシートでアップロードからOCR完了までを確認する
+
+```yaml
+  - type: worker
+    name: amber-ocr-worker
+    runtime: python
+    plan: standard
+    region: singapore
+    branch: main
+    autoDeploy: true
+    numInstances: 1
+    buildCommand: pip install -r requirements-worker.txt
+    startCommand: cd backend && python manage.py run_ocr_worker --poll-seconds 2
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.4
+      - key: DEBUG
+        value: "False"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: amber-postgres-sg
+          property: connectionString
+      - key: CLOUDINARY_URL
+        fromService:
+          type: web
+          name: amber-api
+          envVarKey: CLOUDINARY_URL
+      - key: PADDLE_PDX_MODEL_SOURCE
+        value: BOS
+      - key: PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK
+        value: "True"
+      - key: PADDLE_OCR_VERSION
+        value: PP-OCRv3
+      - key: PADDLE_ENABLE_MKLDNN
+        value: "False"
+```
+
+既存Blueprintの更新では、`sync: false` の新しい秘密情報は自動追加されません。`CLOUDINARY_URL` はBlueprint同期前にRender Dashboardから手動登録してください。Cloudinaryではレシートを `authenticated` アセットとして保存し、OCR時だけ5分間有効な署名付きURLで取得します。APIとWorkerで同じ `CLOUDINARY_URL` を使わない場合、Workerは画像を取得できません。
 
 ### Render PostgreSQL 接続確認
 

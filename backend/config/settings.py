@@ -11,6 +11,7 @@ SECRET_KEY = os.environ.get(
     "django-insecure-local-development-key-change-me",
 )
 DEBUG = os.environ.get("DEBUG", "True").lower() == "true"
+OCR_ENABLED = os.environ.get("OCR_ENABLED", "True").lower() == "true"
 
 def env_list(name, default):
     return [value.strip() for value in os.environ.get(name, default).split(",") if value.strip()]

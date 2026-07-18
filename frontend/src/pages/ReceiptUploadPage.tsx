@@ -3,7 +3,12 @@ import type { ChangeEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { saveExpense } from "../api/expenses";
-import { getReceiptAnalysisJob, startReceiptAnalysis } from "../api/receipts";
+import {
+  getReceiptAnalysisJob,
+  getReceiptOcrAvailability,
+  startReceiptAnalysis,
+} from "../api/receipts";
+import type { OCRAvailability } from "../api/receipts";
 import type { ExpenseSavePayload, OCRJob } from "../types";
 import { readableError } from "../utils/errors";
 import styles from "./ReceiptUploadPage.module.css";
@@ -28,6 +33,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollingGenerationRef = useRef(0);
+  const [ocrAvailability, setOcrAvailability] = useState<OCRAvailability | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
   const [result, setResult] = useState<OCRJob | null>(null);
@@ -37,6 +43,29 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
   const [isSaving, setIsSaving] = useState(false);
   const [pollingRetryCount, setPollingRetryCount] = useState(0);
   const [confirmForm, setConfirmForm] = useState<ExpenseSavePayload>(initialConfirmForm);
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    getReceiptOcrAvailability()
+      .then((availability) => {
+        if (isCurrent) {
+          setOcrAvailability(availability);
+        }
+      })
+      .catch((requestError) => {
+        if (isCurrent) {
+          setOcrAvailability({
+            enabled: false,
+            detail: readableError(requestError),
+          });
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!selectedFile) {
@@ -119,6 +148,14 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
   }
 
   async function handleAnalyze() {
+    if (!ocrAvailability?.enabled) {
+      setError(
+        ocrAvailability?.detail ||
+          "OCR解析は現在利用できません。時間をおいて、もう一度お試しください。",
+      );
+      return;
+    }
+
     if (!selectedFile) {
       setError("レシート画像を選択してください。");
       return;
@@ -187,6 +224,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
   }
 
   const hasSelection = selectedFile !== null;
+  const isOcrAvailable = ocrAvailability?.enabled === true;
   const isOcrPending = result?.status === "pending" || result?.status === "processing";
   const isBusy = isSubmitting || isAnalyzing || isSaving || isOcrPending;
 
@@ -224,9 +262,18 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
 
       {message && <p className={styles.notice}>{message}</p>}
       {error && <p className={styles.error}>{error}</p>}
+      {ocrAvailability === null && (
+        <p className={styles.notice}>OCR機能の利用可否を確認しています。</p>
+      )}
+      {ocrAvailability && !ocrAvailability.enabled && (
+        <p className={styles.warning}>{ocrAvailability.detail}</p>
+      )}
 
       <section className={styles.uploadPanel} aria-label="レシート画像アップロード">
-        <label className={styles.dropArea}>
+        <label
+          className={`${styles.dropArea} ${!isOcrAvailable ? styles.dropAreaDisabled : ""}`}
+          aria-disabled={!isOcrAvailable}
+        >
           <span className={styles.dropIcon} aria-hidden="true">
             +
           </span>
@@ -238,6 +285,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
             accept="image/*"
             capture="environment"
             onChange={handleFileChange}
+            disabled={!isOcrAvailable}
           />
         </label>
 
@@ -258,7 +306,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
           type="button"
           className={styles.primaryButton}
           onClick={handleAnalyze}
-          disabled={!hasSelection || isBusy}
+          disabled={!isOcrAvailable || !hasSelection || isBusy}
         >
           {isAnalyzing || isOcrPending ? "解析中..." : "OCR解析へ進む"}
         </button>

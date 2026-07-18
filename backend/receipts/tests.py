@@ -4,7 +4,7 @@ import os
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APITestCase
@@ -17,6 +17,7 @@ from .worker import _download_image_to_temporary_file, process_next_ocr_job
 User = get_user_model()
 
 
+@override_settings(OCR_ENABLED=True)
 class ReceiptAnalyzeApiTests(APITestCase):
     def setUp(self):
         self.user = User.objects.create_user(
@@ -29,6 +30,37 @@ class ReceiptAnalyzeApiTests(APITestCase):
         response = self.client.post(reverse("receipt-analyze"))
 
         self.assertEqual(response.status_code, 403)
+
+    def test_availability_reports_enabled(self):
+        self.client.force_authenticate(self.user)
+
+        response = self.client.get(reverse("ocr-availability"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["enabled"])
+        self.assertEqual(response.data["detail"], "")
+
+    @override_settings(OCR_ENABLED=False)
+    def test_disabled_ocr_rejects_job_creation(self):
+        self.client.force_authenticate(self.user)
+        image = SimpleUploadedFile(
+            "receipt.jpg",
+            b"fake image bytes",
+            content_type="image/jpeg",
+        )
+
+        availability_response = self.client.get(reverse("ocr-availability"))
+        analyze_response = self.client.post(
+            reverse("receipt-analyze"),
+            {"image": image},
+            format="multipart",
+        )
+
+        self.assertEqual(availability_response.status_code, 200)
+        self.assertFalse(availability_response.data["enabled"])
+        self.assertIn("現在利用できません", availability_response.data["detail"])
+        self.assertEqual(analyze_response.status_code, 503)
+        self.assertEqual(OCRJob.objects.count(), 0)
 
     def test_analyze_creates_pending_job_without_saving_expense(self):
         self.client.force_authenticate(self.user)
