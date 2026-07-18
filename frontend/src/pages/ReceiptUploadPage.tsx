@@ -65,6 +65,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
         }
         setResult(nextResult);
         setPollingRetryCount(0);
+        setError("");
         if (nextResult.status === "succeeded") {
           populateConfirmForm(nextResult);
           setMessage("OCR解析が完了しました。内容を確認して保存してください。");
@@ -92,6 +93,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
     pollingGenerationRef.current += 1;
+    setIsAnalyzing(false);
     setResult(null);
     setMessage("");
     setError("");
@@ -122,21 +124,30 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
       return;
     }
 
+    const generation = pollingGenerationRef.current + 1;
+    pollingGenerationRef.current = generation;
     setIsAnalyzing(true);
     setError("");
     setMessage("");
     setResult(null);
     setPollingRetryCount(0);
-    pollingGenerationRef.current += 1;
 
     try {
       const analyzedResult = await startReceiptAnalysis(selectedFile);
+      if (generation !== pollingGenerationRef.current) {
+        return;
+      }
       setResult(analyzedResult);
       setMessage("OCR解析を受け付けました。解析が完了するまでお待ちください。");
     } catch (requestError) {
+      if (generation !== pollingGenerationRef.current) {
+        return;
+      }
       setError(readableError(requestError));
     } finally {
-      setIsAnalyzing(false);
+      if (generation === pollingGenerationRef.current) {
+        setIsAnalyzing(false);
+      }
     }
   }
 
@@ -163,6 +174,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
 
   function clearSelection() {
     pollingGenerationRef.current += 1;
+    setIsAnalyzing(false);
     setSelectedFile(null);
     setResult(null);
     setPollingRetryCount(0);
