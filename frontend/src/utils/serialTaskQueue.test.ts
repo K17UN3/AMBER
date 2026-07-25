@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createSerialTaskQueue } from "./serialTaskQueue";
+import { createSerialTaskQueue, raceWithAbort } from "./serialTaskQueue";
 
 describe("createSerialTaskQueue", () => {
   it("does not start the next task until the active task finishes", async () => {
@@ -62,5 +62,34 @@ describe("createSerialTaskQueue", () => {
     expect(abortError).toBeInstanceOf(DOMException);
     expect((abortError as DOMException).name).toBe("AbortError");
     expect(secondStarted).toBe(false);
+  });
+
+  it("runs the next task after an active operation is aborted", async () => {
+    const enqueue = createSerialTaskQueue();
+    const controller = new AbortController();
+    let rejectRecognition: ((error: Error) => void) | undefined;
+    let recognitionStarted = false;
+    const pendingRecognition = new Promise<void>((_, reject) => {
+      rejectRecognition = reject;
+    });
+
+    const first = enqueue(async () => {
+      recognitionStarted = true;
+      await raceWithAbort(pendingRecognition, controller.signal);
+    }, controller.signal);
+    const firstResult = first.catch((error: unknown) => error);
+    const second = enqueue(async () => "next OCR completed");
+
+    await Promise.resolve();
+    expect(recognitionStarted).toBe(true);
+    controller.abort();
+
+    const abortError = await firstResult;
+    expect(abortError).toBeInstanceOf(DOMException);
+    expect((abortError as DOMException).name).toBe("AbortError");
+    await expect(second).resolves.toBe("next OCR completed");
+
+    rejectRecognition?.(new Error("terminated worker rejected late"));
+    await Promise.resolve();
   });
 });

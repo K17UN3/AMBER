@@ -2,7 +2,10 @@ import { createWorker, OEM, PSM } from "tesseract.js";
 import type { LoggerMessage, Worker } from "tesseract.js";
 
 import type { ClientOCRResult, ReceiptOCRResult } from "../types";
-import { createSerialTaskQueue } from "../utils/serialTaskQueue";
+import {
+  createSerialTaskQueue,
+  raceWithAbort,
+} from "../utils/serialTaskQueue";
 
 type ProgressListener = (message: LoggerMessage) => void;
 
@@ -63,47 +66,58 @@ async function runReceiptOcrExclusive(
   progressListener = onProgress ?? null;
   let preparedImage: HTMLCanvasElement | null = null;
   let worker: Worker | null = null;
-  let terminateWorker: Promise<unknown> | null = null;
   const handleAbort = () => {
     if (!worker) {
       return;
     }
     workerPromise = null;
-    terminateWorker = worker.terminate().catch(() => undefined);
+    void worker.terminate().catch(() => undefined);
   };
 
   try {
     throwIfAborted(signal);
-    worker = await getWorker();
+    worker = await raceWithAbort(getWorker(), signal);
     throwIfAborted(signal);
     signal?.addEventListener("abort", handleAbort, { once: true });
     preparedImage = await prepareReceiptImage(image);
     throwIfAborted(signal);
-    await worker.setParameters({
-      tessedit_pageseg_mode: PSM.AUTO,
-      preserve_interword_spaces: "0",
-    });
+    await raceWithAbort(
+      worker.setParameters({
+        tessedit_pageseg_mode: PSM.AUTO,
+        preserve_interword_spaces: "0",
+      }),
+      signal,
+    );
     recognitionPass = 1;
-    const originalResult = await worker.recognize(
-      preparedImage,
-      {},
-      { text: true, blocks: true },
+    const originalResult = await raceWithAbort(
+      worker.recognize(
+        preparedImage,
+        {},
+        { text: true, blocks: true },
+      ),
+      signal,
     );
     throwIfAborted(signal);
 
     let enhancedResult: Tesseract.RecognizeResult | null = null;
     try {
       enhanceReceiptImage(preparedImage);
-      await worker.setParameters({
-        tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
-        preserve_interword_spaces: "1",
-        user_defined_dpi: "300",
-      });
+      await raceWithAbort(
+        worker.setParameters({
+          tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+          preserve_interword_spaces: "1",
+          user_defined_dpi: "300",
+        }),
+        signal,
+      );
       recognitionPass = 2;
-      enhancedResult = await worker.recognize(
-        preparedImage,
-        { rotateAuto: true },
-        { text: true, blocks: true },
+      enhancedResult = await raceWithAbort(
+        worker.recognize(
+          preparedImage,
+          { rotateAuto: true },
+          { text: true, blocks: true },
+        ),
+        signal,
       );
     } catch (error) {
       if (signal?.aborted) {
@@ -114,10 +128,13 @@ async function runReceiptOcrExclusive(
     } finally {
       if (!signal?.aborted) {
         try {
-          await worker.setParameters({
-            tessedit_pageseg_mode: PSM.AUTO,
-            preserve_interword_spaces: "0",
-          });
+          await raceWithAbort(
+            worker.setParameters({
+              tessedit_pageseg_mode: PSM.AUTO,
+              preserve_interword_spaces: "0",
+            }),
+            signal,
+          );
         } catch {
           // The next run configures the page segmentation mode again.
         }
@@ -151,9 +168,6 @@ async function runReceiptOcrExclusive(
     };
   } finally {
     signal?.removeEventListener("abort", handleAbort);
-    if (terminateWorker) {
-      await terminateWorker;
-    }
     if (preparedImage) {
       preparedImage.width = 0;
       preparedImage.height = 0;
