@@ -2,6 +2,7 @@
   "scripts": {
     "dev": "vite --host localhost --port 3000",
     "build": "tsc -b && vite build",
+    "test": "vitest run",
     "test:ocr": "vitest run src/ocr/receiptOcr.test.ts",
     "preview": "vite preview --host localhost --port 3000"
   },
