@@ -1,4 +1,5 @@
 import os
+import re
 from importlib import reload
 from unittest.mock import patch
 
@@ -12,16 +13,22 @@ User = get_user_model()
 
 
 class SettingsTests(SimpleTestCase):
-    def test_vercel_frontend_defaults_are_allowed_for_csrf_and_cors(self):
-        with patch.dict(os.environ, {"FRONTEND_ORIGIN": "https://amber-app.vercel.app"}, clear=False):
+    def test_vercel_frontend_defaults_are_scoped_to_the_configured_project(self):
+        with patch.dict(os.environ, {"FRONTEND_ORIGIN": "https://amber-lilac.vercel.app"}, clear=False):
             import config.settings as settings_module
 
             reloaded_settings = reload(settings_module)
 
-            self.assertIn("https://amber-app.vercel.app", reloaded_settings.CORS_ALLOWED_ORIGINS)
-            self.assertIn(r"^https://.*\.vercel\.app$", reloaded_settings.CORS_ALLOWED_ORIGIN_REGEXES)
-            self.assertIn("https://amber-app.vercel.app", reloaded_settings.CSRF_TRUSTED_ORIGINS)
-            self.assertIn("https://*.vercel.app", reloaded_settings.CSRF_TRUSTED_ORIGINS)
+            self.assertIn("https://amber-lilac.vercel.app", reloaded_settings.CORS_ALLOWED_ORIGINS)
+            self.assertIn(
+                settings_module.build_vercel_origin_regex("https://amber-lilac.vercel.app"),
+                reloaded_settings.CORS_ALLOWED_ORIGIN_REGEXES,
+            )
+            self.assertIn("https://amber-lilac.vercel.app", reloaded_settings.CSRF_TRUSTED_ORIGINS)
+            self.assertIn("https://amber-lilac-*.vercel.app", reloaded_settings.CSRF_TRUSTED_ORIGINS)
+            self.assertNotIn("https://*.vercel.app", reloaded_settings.CSRF_TRUSTED_ORIGINS)
+            self.assertTrue(any(re.match(pattern, "https://amber-lilac-preview.vercel.app") for pattern in reloaded_settings.CORS_ALLOWED_ORIGIN_REGEXES))
+            self.assertFalse(any(re.match(pattern, "https://attacker.vercel.app") for pattern in reloaded_settings.CORS_ALLOWED_ORIGIN_REGEXES))
 
 
 @override_settings(ROOT_URLCONF="config.urls")

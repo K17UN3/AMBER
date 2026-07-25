@@ -1,5 +1,7 @@
-from pathlib import Path
 import os
+import re
+from pathlib import Path
+from urllib.parse import urlparse
 
 import dj_database_url
 
@@ -14,6 +16,38 @@ DEBUG = os.environ.get("DEBUG", "True").lower() == "true"
 
 def env_list(name, default):
     return [value.strip() for value in os.environ.get(name, default).split(",") if value.strip()]
+
+
+def build_vercel_origin_regex(frontend_origin):
+    parsed = urlparse(frontend_origin)
+    if parsed.scheme != "https":
+        return None
+
+    host = parsed.hostname or ""
+    if not host.endswith(".vercel.app"):
+        return None
+
+    project_slug = host[:-len(".vercel.app")]
+    if not project_slug:
+        return None
+
+    return rf"^https://{re.escape(project_slug)}(?:-[a-z0-9-]+)*\.vercel\.app$"
+
+
+def build_vercel_csrf_origins(frontend_origin):
+    parsed = urlparse(frontend_origin)
+    if parsed.scheme != "https":
+        return []
+
+    host = parsed.hostname or ""
+    if not host.endswith(".vercel.app"):
+        return []
+
+    project_slug = host[:-len(".vercel.app")]
+    if not project_slug:
+        return []
+
+    return [f"https://{project_slug}.vercel.app", f"https://{project_slug}-*.vercel.app"]
 
 
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "localhost,127.0.0.1")
@@ -104,15 +138,19 @@ REST_FRAMEWORK = {
     ],
 }
 
-FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000")
-DEFAULT_FRONTEND_ORIGINS = [FRONTEND_ORIGIN, "http://127.0.0.1:3000", "https://*.vercel.app"]
-DEFAULT_CORS_ORIGIN_REGEXES = [r"^https://.*\.vercel\.app$"]
+FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "https://amber-lilac.vercel.app")
+DEFAULT_FRONTEND_ORIGINS = [FRONTEND_ORIGIN]
+DEFAULT_CORS_ORIGIN_REGEXES = []
+vercel_origin_regex = build_vercel_origin_regex(FRONTEND_ORIGIN)
+if vercel_origin_regex:
+    DEFAULT_CORS_ORIGIN_REGEXES.append(vercel_origin_regex)
 
 CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", ",".join(DEFAULT_FRONTEND_ORIGINS))
 CORS_ALLOWED_ORIGIN_REGEXES = env_list("CORS_ALLOWED_ORIGIN_REGEXES", ",".join(DEFAULT_CORS_ORIGIN_REGEXES))
 CORS_ALLOW_CREDENTIALS = True
 
-CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", ",".join(DEFAULT_FRONTEND_ORIGINS))
+DEFAULT_CSRF_TRUSTED_ORIGINS = DEFAULT_FRONTEND_ORIGINS + build_vercel_csrf_origins(FRONTEND_ORIGIN)
+CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", ",".join(DEFAULT_CSRF_TRUSTED_ORIGINS))
 CSRF_COOKIE_HTTPONLY = False
 
 SESSION_COOKIE_SAMESITE = os.environ.get("SESSION_COOKIE_SAMESITE", "Lax")
