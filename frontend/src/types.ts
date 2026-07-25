@@ -49,13 +49,13 @@ export type ExpenseSavePayload = {
   purchased_at: string;
   total_amount: number;
   category: string;
-  image?: string;
   raw_ocr_text: string;
 };
 
 export type SavedExpense = ExpenseSavePayload & {
   id: number;
   user: number;
+  image: string;
   created_at: string;
   updated_at: string;
 };

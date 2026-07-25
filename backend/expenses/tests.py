@@ -1,8 +1,13 @@
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from django.utils import timezone
+from django.test import override_settings
 from rest_framework.test import APITestCase
 
+from .image_storage import ImageStorageError
 from .models import Expense
 
 
@@ -92,6 +97,214 @@ class ExpenseApiTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["shop_name"], "アンバーマート")
+
+    def test_expense_put_updates_current_user_record(self):
+        expense = Expense.objects.create(
+            user=self.user,
+            image="https://res.cloudinary.com/demo/image/upload/old.jpg",
+            image_public_id="amber/receipts/1/old",
+            **self.payload,
+        )
+        self.client.force_authenticate(self.user)
+        updated_payload = {
+            **self.payload,
+            "shop_name": "更新後マート",
+            "total_amount": 1500,
+            "category": "日用品",
+        }
+
+        response = self.client.put(
+            reverse("expense-detail", args=[expense.id]),
+            updated_payload,
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        expense.refresh_from_db()
+        self.assertEqual(expense.shop_name, "更新後マート")
+        self.assertEqual(expense.total_amount, 1500)
+        self.assertEqual(expense.category, "日用品")
+        self.assertEqual(expense.image_public_id, "amber/receipts/1/old")
+        self.assertNotIn("image_public_id", response.data)
+
+    def test_expense_put_validates_required_fields(self):
+        expense = Expense.objects.create(user=self.user, **self.payload)
+        self.client.force_authenticate(self.user)
+
+        response = self.client.put(
+            reverse("expense-detail", args=[expense.id]),
+            {"shop_name": "更新後マート"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("purchased_at", response.data)
+        self.assertIn("total_amount", response.data)
+        self.assertIn("category", response.data)
+
+    def test_expense_patch_updates_only_supplied_fields(self):
+        expense = Expense.objects.create(user=self.user, **self.payload)
+        self.client.force_authenticate(self.user)
+
+        response = self.client.patch(
+            reverse("expense-detail", args=[expense.id]),
+            {"shop_name": "一部更新"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        expense.refresh_from_db()
+        self.assertEqual(expense.shop_name, "一部更新")
+        self.assertEqual(expense.total_amount, 1280)
+        self.assertEqual(expense.category, "食費")
+
+    def test_other_users_expense_cannot_be_updated_or_deleted(self):
+        expense = Expense.objects.create(user=self.other_user, **self.payload)
+        self.client.force_authenticate(self.user)
+
+        update_response = self.client.patch(
+            reverse("expense-detail", args=[expense.id]),
+            {"shop_name": "不正更新"},
+            format="json",
+        )
+        delete_response = self.client.delete(reverse("expense-detail", args=[expense.id]))
+
+        self.assertEqual(update_response.status_code, 404)
+        self.assertEqual(delete_response.status_code, 404)
+        expense.refresh_from_db()
+        self.assertEqual(expense.shop_name, "アンバーマート")
+
+    def test_expense_delete_removes_record(self):
+        expense = Expense.objects.create(user=self.user, **self.payload)
+        self.client.force_authenticate(self.user)
+
+        response = self.client.delete(reverse("expense-detail", args=[expense.id]))
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Expense.objects.filter(pk=expense.id).exists())
+
+    @override_settings(CLOUDINARY_URL="cloudinary://key:secret@example")
+    @patch("expenses.views.upload_receipt_image")
+    def test_expense_create_uploads_image_and_hides_public_id(self, upload_mock):
+        upload_mock.return_value = (
+            "https://res.cloudinary.com/example/image/upload/new.jpg",
+            "amber/receipts/1/new",
+        )
+        self.client.force_authenticate(self.user)
+        image = SimpleUploadedFile("receipt.jpg", b"image-bytes", content_type="image/jpeg")
+
+        response = self.client.post(
+            reverse("expense-list"),
+            {**self.payload, "image": image},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        expense = Expense.objects.get()
+        self.assertEqual(expense.image, "https://res.cloudinary.com/example/image/upload/new.jpg")
+        self.assertEqual(expense.image_public_id, "amber/receipts/1/new")
+        self.assertNotIn("image_public_id", response.data)
+
+    @override_settings(CLOUDINARY_URL="cloudinary://key:secret@example")
+    @patch("expenses.views.delete_receipt_image")
+    @patch("expenses.views.upload_receipt_image")
+    def test_expense_image_replacement_cleans_up_old_image(self, upload_mock, delete_mock):
+        expense = Expense.objects.create(
+            user=self.user,
+            image="https://res.cloudinary.com/example/image/upload/old.jpg",
+            image_public_id="amber/receipts/1/old",
+            **self.payload,
+        )
+        upload_mock.return_value = (
+            "https://res.cloudinary.com/example/image/upload/new.jpg",
+            "amber/receipts/1/new",
+        )
+        self.client.force_authenticate(self.user)
+        image = SimpleUploadedFile("receipt.jpg", b"image-bytes", content_type="image/jpeg")
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.put(
+                reverse("expense-detail", args=[expense.id]),
+                {**self.payload, "image": image},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        expense.refresh_from_db()
+        self.assertEqual(expense.image_public_id, "amber/receipts/1/new")
+        delete_mock.assert_called_once_with("amber/receipts/1/old")
+
+    @patch("expenses.views.delete_receipt_image")
+    def test_expense_delete_cleans_up_managed_image(self, delete_mock):
+        expense = Expense.objects.create(
+            user=self.user,
+            image="https://res.cloudinary.com/example/image/upload/old.jpg",
+            image_public_id="amber/receipts/1/old",
+            **self.payload,
+        )
+        self.client.force_authenticate(self.user)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.delete(reverse("expense-detail", args=[expense.id]))
+
+        self.assertEqual(response.status_code, 204)
+        delete_mock.assert_called_once_with("amber/receipts/1/old")
+
+    @override_settings(CLOUDINARY_URL="")
+    def test_image_upload_without_cloudinary_config_does_not_create_expense(self):
+        self.client.force_authenticate(self.user)
+        image = SimpleUploadedFile("receipt.jpg", b"image-bytes", content_type="image/jpeg")
+
+        response = self.client.post(
+            reverse("expense-list"),
+            {**self.payload, "image": image},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(Expense.objects.exists())
+
+    @override_settings(CLOUDINARY_URL="cloudinary://key:secret@example")
+    @patch("expenses.views.upload_receipt_image")
+    def test_image_upload_failure_does_not_create_expense(self, upload_mock):
+        upload_mock.side_effect = ImageStorageError("画像の保存に失敗しました。")
+        self.client.force_authenticate(self.user)
+        image = SimpleUploadedFile("receipt.jpg", b"image-bytes", content_type="image/jpeg")
+
+        response = self.client.post(
+            reverse("expense-list"),
+            {**self.payload, "image": image},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(Expense.objects.exists())
+
+    def test_update_and_delete_are_reflected_in_monthly_summary(self):
+        expense = Expense.objects.create(user=self.user, **self.payload)
+        self.client.force_authenticate(self.user)
+
+        self.client.patch(
+            reverse("expense-detail", args=[expense.id]),
+            {"total_amount": 2000, "category": "日用品"},
+            format="json",
+        )
+        updated_summary = self.client.get(
+            reverse("monthly-summary"),
+            {"year": 2026, "month": 6},
+        )
+        self.client.delete(reverse("expense-detail", args=[expense.id]))
+        deleted_summary = self.client.get(
+            reverse("monthly-summary"),
+            {"year": 2026, "month": 6},
+        )
+
+        self.assertEqual(updated_summary.data["grand_total"], 2000)
+        self.assertEqual(
+            updated_summary.data["categories"],
+            [{"category": "日用品", "total": 2000}],
+        )
+        self.assertEqual(deleted_summary.data["grand_total"], 0)
 
     def test_monthly_summary_requires_login(self):
         response = self.client.get(reverse("monthly-summary"), {"year": 2026, "month": 6})

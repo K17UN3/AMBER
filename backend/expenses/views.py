@@ -1,16 +1,31 @@
+from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import status
+from rest_framework.exceptions import APIException, NotFound, ValidationError
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .image_storage import (
+    ImageStorageError,
+    ImageValidationError,
+    delete_receipt_image,
+    upload_receipt_image,
+)
 from .models import Expense
 from .serializers import ExpenseSerializer
 
 
+class ImageStorageUnavailable(APIException):
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    default_code = "image_storage_unavailable"
+
+
 class ExpenseListCreateView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def get(self, request):
         expenses = Expense.objects.filter(user=request.user)
@@ -18,22 +33,112 @@ class ExpenseListCreateView(APIView):
         return Response(serializer.data)
 
     def post(self, request):
-        serializer = ExpenseSerializer(data=request.data)
+        data, image = _expense_request_data(request)
+        serializer = ExpenseSerializer(data=data)
         serializer.is_valid(raise_exception=True)
-        expense = serializer.save(user=request.user)
+
+        uploaded_image = _upload_image_or_error(image, request.user.id)
+        image_values = _uploaded_image_values(uploaded_image)
+        try:
+            with transaction.atomic():
+                expense = serializer.save(user=request.user, **image_values)
+        except Exception:
+            if uploaded_image:
+                delete_receipt_image(uploaded_image[1])
+            raise
+
         return Response(ExpenseSerializer(expense).data, status=status.HTTP_201_CREATED)
 
 
 class ExpenseDetailView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def get(self, request, pk):
-        expense = Expense.objects.filter(user=request.user, pk=pk).first()
-        if expense is None:
-            return Response(status=status.HTTP_404_NOT_FOUND)
+        expense = self._get_expense(request, pk)
 
         serializer = ExpenseSerializer(expense)
         return Response(serializer.data)
+
+    def put(self, request, pk):
+        return self._update(request, pk, partial=False)
+
+    def patch(self, request, pk):
+        return self._update(request, pk, partial=True)
+
+    def delete(self, request, pk):
+        expense = self._get_expense(request, pk)
+        public_id = expense.image_public_id
+
+        with transaction.atomic():
+            expense.delete()
+            if public_id:
+                transaction.on_commit(lambda public_id=public_id: delete_receipt_image(public_id))
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def _update(self, request, pk, partial):
+        expense = self._get_expense(request, pk)
+        data, image = _expense_request_data(request)
+        serializer = ExpenseSerializer(expense, data=data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+
+        uploaded_image = _upload_image_or_error(image, request.user.id)
+        old_public_id = expense.image_public_id
+        image_values = _uploaded_image_values(uploaded_image)
+
+        if image is None and "image" in data and data.get("image") != expense.image:
+            image_values["image_public_id"] = ""
+
+        try:
+            with transaction.atomic():
+                expense = serializer.save(**image_values)
+                if old_public_id and old_public_id != expense.image_public_id:
+                    transaction.on_commit(
+                        lambda public_id=old_public_id: delete_receipt_image(public_id)
+                    )
+        except Exception:
+            if uploaded_image:
+                delete_receipt_image(uploaded_image[1])
+            raise
+
+        return Response(ExpenseSerializer(expense).data)
+
+    @staticmethod
+    def _get_expense(request, pk):
+        expense = Expense.objects.filter(user=request.user, pk=pk).first()
+        if expense is None:
+            raise NotFound()
+        return expense
+
+
+def _expense_request_data(request):
+    image = request.FILES.get("image")
+    if image is None:
+        return request.data, None
+
+    data = request.data.copy()
+    data.pop("image", None)
+    return data, image
+
+
+def _upload_image_or_error(image, user_id):
+    if image is None:
+        return None
+
+    try:
+        return upload_receipt_image(image, user_id)
+    except ImageValidationError as exc:
+        raise ValidationError({"image": [str(exc)]}) from exc
+    except ImageStorageError as exc:
+        raise ImageStorageUnavailable(str(exc)) from exc
+
+
+def _uploaded_image_values(uploaded_image):
+    if uploaded_image is None:
+        return {}
+    image_url, public_id = uploaded_image
+    return {"image": image_url, "image_public_id": public_id}
 
 
 class MonthlyExpenseSummaryView(APIView):

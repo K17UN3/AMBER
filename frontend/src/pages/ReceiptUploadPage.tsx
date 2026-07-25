@@ -114,7 +114,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
     setMessage("");
 
     try {
-      const savedExpense = await saveExpense(confirmForm);
+      const savedExpense = await saveExpense(confirmForm, selectedFile);
       navigate("/receipts/complete", { state: { expense: savedExpense } });
     } catch (requestError) {
       setError(readableError(requestError));

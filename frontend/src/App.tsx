@@ -10,6 +10,7 @@ import ReceiptCompletePage from "./pages/ReceiptCompletePage";
 import ReceiptUploadPage from "./pages/ReceiptUploadPage";
 import ExpenseListPage from "./pages/ExpenseListPage";
 import ExpenseDetailPage from "./pages/ExpenseDetailPage";
+import ExpenseEditPage from "./pages/ExpenseEditPage";
 import MonthlySummaryPage from "./pages/MonthlySummaryPage";
 import type { AuthMode, LoginForm, RegisterForm, User } from "./types";
 import { readableError, readableErrorStatus } from "./utils/errors";
@@ -187,6 +188,14 @@ export default function App() {
         element={
           <ProtectedRoute user={user}>
             <MonthlySummaryPage onLogout={handleLogout} isSubmitting={isSubmitting} />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/expenses/:expenseId/edit"
+        element={
+          <ProtectedRoute user={user}>
+            <ExpenseEditPage onLogout={handleLogout} isSubmitting={isSubmitting} />
           </ProtectedRoute>
         }
       />
