@@ -9,6 +9,7 @@ import { readableError } from "../utils/errors";
 import styles from "./ReceiptUploadPage.module.css";
 
 const maxImageSize = 10 * 1024 * 1024;
+const lowConfidenceThreshold = 70;
 const categories = ["食費", "日用品", "交通費", "医療費", "娯楽", "その他"];
 const initialConfirmForm: ExpenseSavePayload = {
   shop_name: "",
@@ -198,6 +199,11 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
 
       {message && <p className={styles.notice}>{message}</p>}
       {error && <p className={styles.error}>{error}</p>}
+      {result && result.confidence < lowConfidenceThreshold && (
+        <p className={styles.warning}>
+          OCRの信頼度が低いため、店名・購入日・合計金額をレシート画像と照合してください。
+        </p>
+      )}
 
       <section className={styles.uploadPanel} aria-label="レシート画像アップロード">
         <label className={styles.dropArea}>

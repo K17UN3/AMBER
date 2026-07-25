@@ -1,20 +1,36 @@
-import { createWorker, OEM } from "tesseract.js";
+import { createWorker, OEM, PSM } from "tesseract.js";
 import type { LoggerMessage, Worker } from "tesseract.js";
 
 import type { ClientOCRResult, ReceiptOCRResult } from "../types";
 
 type ProgressListener = (message: LoggerMessage) => void;
 
-const totalKeywords = /(?:合\s*(?:計|言\s*十)|お\s*買\s*上(?:げ)?\s*金\s*額|ご\s*請\s*求\s*額|現\s*計|現\s*金|総\s*額)/;
+const totalKeywords = /(?:合\s*(?:計|言\s*[十ニ二])|言\s*[十ニ二]|お\s*買\s*上(?:げ)?\s*金\s*額|ご\s*請\s*求\s*額|現\s*計|現\s*金|総\s*額)/;
 const datePattern = /(?<year>20\d{2})\s*(?:\/|\.|年)\s*(?<month>\d{1,2})\s*(?:\/|\.|月)\s*(?<day>\d{1,2})(?:日)?/;
+const currencyAmountPattern = /(?:¥|￥|\\|Y)\s*([0-9]{1,3}(?:[,.]\s?[0-9]{3})+|[0-9]+)/gi;
+const nonTotalAmountLine = /(?:お\s*預|預\s*り|釣|お\s*つ\s*り|消費\s*税|税\s*額)/;
 
 let progressListener: ProgressListener | null = null;
 let workerPromise: Promise<Worker> | null = null;
+let recognitionPass = 0;
 
 function getWorker() {
   if (!workerPromise) {
     workerPromise = createWorker(["jpn", "eng"], OEM.LSTM_ONLY, {
-      logger: (message) => progressListener?.(message),
+      logger: (message) => {
+        if (message.status !== "recognizing text") {
+          progressListener?.({
+            ...message,
+            progress: message.progress * 0.1,
+          });
+          return;
+        }
+        const offset = recognitionPass === 1 ? 0.1 : 0.55;
+        progressListener?.({
+          ...message,
+          progress: offset + message.progress * 0.45,
+        });
+      },
     }).catch((error) => {
       workerPromise = null;
       throw error;
@@ -31,26 +47,74 @@ export async function runReceiptOcr(
 
   try {
     const worker = await getWorker();
-    const result = await worker.recognize(image, {}, { text: true, blocks: true });
-    const rawText = result.data.text.trim();
-    const lines = extractLines(result.data, rawText);
+    await worker.setParameters({
+      tessedit_pageseg_mode: PSM.AUTO,
+      preserve_interword_spaces: "0",
+    });
+    recognitionPass = 1;
+    const originalResult = await worker.recognize(image, {}, { text: true, blocks: true });
+
+    let enhancedResult: Tesseract.RecognizeResult | null = null;
+    try {
+      const preparedImage = await prepareReceiptImage(image);
+      await worker.setParameters({
+        tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+        preserve_interword_spaces: "1",
+        user_defined_dpi: "300",
+      });
+      recognitionPass = 2;
+      enhancedResult = await worker.recognize(
+        preparedImage,
+        { rotateAuto: true },
+        { text: true, blocks: true },
+      );
+    } catch {
+      // The original pass remains usable if browser image preprocessing or
+      // the second recognition pass is unavailable.
+    } finally {
+      try {
+        await worker.setParameters({
+          tessedit_pageseg_mode: PSM.AUTO,
+          preserve_interword_spaces: "0",
+        });
+      } catch {
+        // The next run configures the page segmentation mode again.
+      }
+    }
+
+    const originalText = originalResult.data.text.trim();
+    const enhancedText = enhancedResult?.data.text.trim() ?? "";
+    const extractionText = [enhancedText, originalText].filter(Boolean).join("\n");
+    const originalLines = extractLines(originalResult.data, originalText);
+    const enhancedLines = enhancedResult
+      ? extractLines(enhancedResult.data, enhancedText)
+      : [];
+    const rawText = enhancedText.length > originalText.length ? enhancedText : originalText;
+    const confidence = enhancedResult
+      ? (originalResult.data.confidence + enhancedResult.data.confidence) / 2
+      : originalResult.data.confidence;
 
     return {
-      shop_name: extractShopName(lines),
-      purchased_at: extractPurchasedAt(rawText),
-      total_amount: extractTotalAmount(rawText),
+      shop_name:
+        extractShopName(originalLines) ??
+        extractShopName(enhancedLines),
+      purchased_at: extractPurchasedAt(extractionText),
+      total_amount:
+        extractTotalAmount(enhancedText) ??
+        extractTotalAmount(originalText),
       raw_ocr_text: rawText,
-      confidence: result.data.confidence,
+      confidence,
       engine: "tesseract.js",
     };
   } finally {
+    recognitionPass = 0;
     if (progressListener === onProgress) {
       progressListener = null;
     }
   }
 }
 
-type OCRLine = {
+export type OCRLine = {
   text: string;
   confidence: number;
 };
@@ -91,9 +155,11 @@ export function extractShopName(lines: OCRLine[]) {
     return null;
   }
 
-  return candidates.reduce((best, current) =>
+  const selected = candidates.reduce((best, current) =>
     current.confidence > best.confidence ? current : best,
-  ).text.slice(0, 255);
+  ).text;
+
+  return cleanShopName(selected).slice(0, 255);
 }
 
 export function extractPurchasedAt(rawText: string) {
@@ -125,23 +191,106 @@ export function extractTotalAmount(rawText: string) {
       continue;
     }
 
+    const sameLineAmounts = extractCurrencyAmounts(line);
+    const plausibleSameLineAmounts = sameLineAmounts.filter((amount) => amount >= 100);
+    if (plausibleSameLineAmounts.length > 0) {
+      return Math.max(...plausibleSameLineAmounts);
+    }
+
     const nearbyLines = [line, lines[index - 1], lines[index + 1]].filter(
-      (nearby): nearby is string => nearby !== undefined,
+      (nearby): nearby is string =>
+        nearby !== undefined && !nonTotalAmountLine.test(nearby),
     );
-    for (const nearby of nearbyLines) {
-      const matches = [
-        ...nearby.matchAll(/(?:¥|￥)?\s*([0-9]{1,3}(?:[,.][0-9]{3})+|[0-9]+)(?![0-9])/g),
-      ];
-      const amount = matches.at(-1)?.[1];
-      if (amount) {
-        return Number(amount.replace(/[,.]/g, ""));
+    const nearbyAmounts = nearbyLines.flatMap(extractCurrencyAmounts);
+    if (nearbyAmounts.length > 0) {
+      return Math.max(...nearbyAmounts);
+    }
+  }
+
+  for (const line of lines) {
+    if (/(?:%|％)\s*(?:対象|対|TH|T\s*H)/i.test(line)) {
+      const amounts = extractCurrencyAmounts(line);
+      if (amounts.length > 0) {
+        return Math.max(...amounts);
       }
     }
   }
 
-  return null;
+  return extractRepeatedCurrencyAmount(lines);
 }
 
 export function toClientOCRResult(result: ReceiptOCRResult): ClientOCRResult {
   return { ...result };
+}
+
+function cleanShopName(value: string) {
+  const normalized = value.normalize("NFKC").trim();
+  const withoutLeadingNoise = normalized.replace(
+    /^[^A-Za-zァ-ヶ一-龯々〆ヵヶ0-9]+/,
+    "",
+  );
+  return withoutLeadingNoise.replace(/\s+/g, " ").trim();
+}
+
+function extractCurrencyAmounts(line: string) {
+  return [...line.matchAll(currencyAmountPattern)]
+    .map((match) => Number(match[1].replace(/[\s,.]/g, "")))
+    .filter((amount) => Number.isSafeInteger(amount) && amount > 0);
+}
+
+function extractRepeatedCurrencyAmount(lines: string[]) {
+  const counts = new Map<number, number>();
+
+  for (const line of lines) {
+    if (nonTotalAmountLine.test(line)) {
+      continue;
+    }
+    for (const amount of new Set(extractCurrencyAmounts(line))) {
+      counts.set(amount, (counts.get(amount) ?? 0) + 1);
+    }
+  }
+
+  const repeated = [...counts.entries()]
+    .filter(([, count]) => count >= 2)
+    .sort(([amountA, countA], [amountB, countB]) =>
+      countB - countA || amountB - amountA,
+    );
+
+  return repeated[0]?.[0] ?? null;
+}
+
+async function prepareReceiptImage(image: File) {
+  const bitmap = await createImageBitmap(image, {
+    imageOrientation: "from-image",
+  });
+  const maxSide = Math.max(bitmap.width, bitmap.height);
+  const scale = Math.min(1.5, Math.max(1, 2200 / maxSide));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    bitmap.close();
+    throw new Error("画像の前処理を開始できませんでした。");
+  }
+
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  const pixels = imageData.data;
+  for (let index = 0; index < pixels.length; index += 4) {
+    const luminance =
+      pixels[index] * 0.299 +
+      pixels[index + 1] * 0.587 +
+      pixels[index + 2] * 0.114;
+    const contrasted = Math.max(0, Math.min(255, (luminance - 128) * 1.45 + 128));
+    pixels[index] = contrasted;
+    pixels[index + 1] = contrasted;
+    pixels[index + 2] = contrasted;
+  }
+  context.putImageData(imageData, 0, 0);
+
+  return canvas;
 }
