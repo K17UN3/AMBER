@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  calculateReceiptImageSize,
   extractPurchasedAt,
   extractShopName,
   extractTotalAmount,
@@ -50,5 +51,29 @@ describe("receipt OCR field extraction", () => {
     ].join("\n");
 
     expect(extractTotalAmount(text)).toBe(746);
+  });
+
+  it("extracts a same-line total without a currency symbol", () => {
+    expect(extractTotalAmount("合計 1280")).toBe(1280);
+  });
+
+  it("extracts a following-line total without a currency symbol", () => {
+    expect(extractTotalAmount("合計\n1280")).toBe(1280);
+  });
+});
+
+describe("receipt OCR image sizing", () => {
+  it("limits both the longest side and total pixel count", () => {
+    const size = calculateReceiptImageSize(8000, 6000);
+
+    expect(Math.max(size.width, size.height)).toBeLessThanOrEqual(2200);
+    expect(size.width * size.height).toBeLessThanOrEqual(4_000_000);
+  });
+
+  it("does not enlarge an image already within the limits", () => {
+    expect(calculateReceiptImageSize(1200, 900)).toEqual({
+      width: 1200,
+      height: 900,
+    });
   });
 });

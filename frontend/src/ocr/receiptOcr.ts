@@ -2,17 +2,22 @@ import { createWorker, OEM, PSM } from "tesseract.js";
 import type { LoggerMessage, Worker } from "tesseract.js";
 
 import type { ClientOCRResult, ReceiptOCRResult } from "../types";
+import { createSerialTaskQueue } from "../utils/serialTaskQueue";
 
 type ProgressListener = (message: LoggerMessage) => void;
 
 const totalKeywords = /(?:合\s*(?:計|言\s*[十ニ二])|言\s*[十ニ二]|お\s*買\s*上(?:げ)?\s*金\s*額|ご\s*請\s*求\s*額|現\s*計|現\s*金|総\s*額)/;
 const datePattern = /(?<year>20\d{2})\s*(?:\/|\.|年)\s*(?<month>\d{1,2})\s*(?:\/|\.|月)\s*(?<day>\d{1,2})(?:日)?/;
 const currencyAmountPattern = /(?:¥|￥|\\|Y)\s*([0-9]{1,3}(?:[,.]\s?[0-9]{3})+|[0-9]+)/gi;
+const plainAmountPattern = /(?:^|[^0-9])([0-9]{1,3}(?:[,.]\s?[0-9]{3})+|[0-9]+)(?![0-9])/g;
 const nonTotalAmountLine = /(?:お\s*預|預\s*り|釣|お\s*つ\s*り|消費\s*税|税\s*額)/;
+const maxReceiptImageSide = 2200;
+const maxReceiptImagePixels = 4_000_000;
 
 let progressListener: ProgressListener | null = null;
 let workerPromise: Promise<Worker> | null = null;
 let recognitionPass = 0;
+const enqueueOcr = createSerialTaskQueue();
 
 function getWorker() {
   if (!workerPromise) {
@@ -39,24 +44,37 @@ function getWorker() {
   return workerPromise;
 }
 
-export async function runReceiptOcr(
+export function runReceiptOcr(
+  image: File,
+  onProgress?: ProgressListener,
+): Promise<ReceiptOCRResult> {
+  return enqueueOcr(() => runReceiptOcrExclusive(image, onProgress));
+}
+
+async function runReceiptOcrExclusive(
   image: File,
   onProgress?: ProgressListener,
 ): Promise<ReceiptOCRResult> {
   progressListener = onProgress ?? null;
+  let preparedImage: HTMLCanvasElement | null = null;
 
   try {
     const worker = await getWorker();
+    preparedImage = await prepareReceiptImage(image);
     await worker.setParameters({
       tessedit_pageseg_mode: PSM.AUTO,
       preserve_interword_spaces: "0",
     });
     recognitionPass = 1;
-    const originalResult = await worker.recognize(image, {}, { text: true, blocks: true });
+    const originalResult = await worker.recognize(
+      preparedImage,
+      {},
+      { text: true, blocks: true },
+    );
 
     let enhancedResult: Tesseract.RecognizeResult | null = null;
     try {
-      const preparedImage = await prepareReceiptImage(image);
+      enhanceReceiptImage(preparedImage);
       await worker.setParameters({
         tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
         preserve_interword_spaces: "1",
@@ -107,6 +125,10 @@ export async function runReceiptOcr(
       engine: "tesseract.js",
     };
   } finally {
+    if (preparedImage) {
+      preparedImage.width = 0;
+      preparedImage.height = 0;
+    }
     recognitionPass = 0;
     if (progressListener === onProgress) {
       progressListener = null;
@@ -191,17 +213,19 @@ export function extractTotalAmount(rawText: string) {
       continue;
     }
 
-    const sameLineAmounts = extractCurrencyAmounts(line);
+    const sameLineAmounts = extractContextualAmounts(line);
     const plausibleSameLineAmounts = sameLineAmounts.filter((amount) => amount >= 100);
     if (plausibleSameLineAmounts.length > 0) {
       return Math.max(...plausibleSameLineAmounts);
     }
 
-    const nearbyLines = [line, lines[index - 1], lines[index + 1]].filter(
+    const nearbyLines = [lines[index + 1]].filter(
       (nearby): nearby is string =>
         nearby !== undefined && !nonTotalAmountLine.test(nearby),
     );
-    const nearbyAmounts = nearbyLines.flatMap(extractCurrencyAmounts);
+    const nearbyAmounts = nearbyLines
+      .flatMap(extractContextualAmounts)
+      .filter((amount) => amount >= 100);
     if (nearbyAmounts.length > 0) {
       return Math.max(...nearbyAmounts);
     }
@@ -238,6 +262,18 @@ function extractCurrencyAmounts(line: string) {
     .filter((amount) => Number.isSafeInteger(amount) && amount > 0);
 }
 
+function extractContextualAmounts(line: string) {
+  const amounts = [
+    ...extractCurrencyAmounts(line),
+    ...[...line.matchAll(plainAmountPattern)].map((match) =>
+      Number(match[1].replace(/[\s,.]/g, "")),
+    ),
+  ];
+  return [...new Set(amounts)].filter(
+    (amount) => Number.isSafeInteger(amount) && amount > 0,
+  );
+}
+
 function extractRepeatedCurrencyAmount(lines: string[]) {
   const counts = new Map<number, number>();
 
@@ -259,24 +295,54 @@ function extractRepeatedCurrencyAmount(lines: string[]) {
   return repeated[0]?.[0] ?? null;
 }
 
+export function calculateReceiptImageSize(width: number, height: number) {
+  if (
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    throw new Error("画像の大きさを取得できませんでした。");
+  }
+
+  const maxSideScale = maxReceiptImageSide / Math.max(width, height);
+  const pixelScale = Math.sqrt(maxReceiptImagePixels / (width * height));
+  const scale = Math.min(1, maxSideScale, pixelScale);
+  return {
+    width: Math.max(1, Math.floor(width * scale)),
+    height: Math.max(1, Math.floor(height * scale)),
+  };
+}
+
 async function prepareReceiptImage(image: File) {
   const bitmap = await createImageBitmap(image, {
     imageOrientation: "from-image",
   });
-  const maxSide = Math.max(bitmap.width, bitmap.height);
-  const scale = Math.min(1.5, Math.max(1, 2200 / maxSide));
+  const size = calculateReceiptImageSize(bitmap.width, bitmap.height);
   const canvas = document.createElement("canvas");
-  canvas.width = Math.round(bitmap.width * scale);
-  canvas.height = Math.round(bitmap.height * scale);
+  canvas.width = size.width;
+  canvas.height = size.height;
 
-  const context = canvas.getContext("2d", { willReadFrequently: true });
+  const context = canvas.getContext("2d");
   if (!context) {
     bitmap.close();
     throw new Error("画像の前処理を開始できませんでした。");
   }
 
-  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  bitmap.close();
+  try {
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  } finally {
+    bitmap.close();
+  }
+
+  return canvas;
+}
+
+function enhanceReceiptImage(canvas: HTMLCanvasElement) {
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    throw new Error("画像の前処理を開始できませんでした。");
+  }
 
   const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
   const pixels = imageData.data;
@@ -291,6 +357,4 @@ async function prepareReceiptImage(image: File) {
     pixels[index + 2] = contrasted;
   }
   context.putImageData(imageData, 0, 0);
-
-  return canvas;
 }
