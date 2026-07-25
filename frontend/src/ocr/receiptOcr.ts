@@ -6,11 +6,11 @@ import { createSerialTaskQueue } from "../utils/serialTaskQueue";
 
 type ProgressListener = (message: LoggerMessage) => void;
 
-const totalKeywords = /(?:合\s*(?:計|言\s*[十ニ二])|言\s*[十ニ二]|お\s*買\s*上(?:げ)?\s*金\s*額|ご\s*請\s*求\s*額|現\s*計|現\s*金|総\s*額)/;
+const totalKeywords = /(?:合\s*(?:計|言\s*[十ニ二])|言\s*[十ニ二]|お\s*買\s*上(?:げ)?\s*金\s*額|ご\s*請\s*求\s*額|現\s*計|総\s*額)/;
 const datePattern = /(?<year>20\d{2})\s*(?:\/|\.|年)\s*(?<month>\d{1,2})\s*(?:\/|\.|月)\s*(?<day>\d{1,2})(?:日)?/;
 const currencyAmountPattern = /(?:¥|￥|\\|Y)\s*([0-9]{1,3}(?:[,.]\s?[0-9]{3})+|[0-9]+)/gi;
 const plainAmountPattern = /(?:^|[^0-9])([0-9]{1,3}(?:[,.]\s?[0-9]{3})+|[0-9]+)(?![0-9])/g;
-const nonTotalAmountLine = /(?:お\s*預|預\s*り|釣|お\s*つ\s*り|消費\s*税|税\s*額)/;
+const nonTotalAmountLine = /(?:現\s*金|お\s*預|預\s*り|釣|お\s*つ\s*り|消費\s*税|税\s*額)/;
 const maxReceiptImageSide = 2200;
 const maxReceiptImagePixels = 4_000_000;
 
@@ -47,20 +47,38 @@ function getWorker() {
 export function runReceiptOcr(
   image: File,
   onProgress?: ProgressListener,
+  signal?: AbortSignal,
 ): Promise<ReceiptOCRResult> {
-  return enqueueOcr(() => runReceiptOcrExclusive(image, onProgress));
+  return enqueueOcr(
+    () => runReceiptOcrExclusive(image, onProgress, signal),
+    signal,
+  );
 }
 
 async function runReceiptOcrExclusive(
   image: File,
   onProgress?: ProgressListener,
+  signal?: AbortSignal,
 ): Promise<ReceiptOCRResult> {
   progressListener = onProgress ?? null;
   let preparedImage: HTMLCanvasElement | null = null;
+  let worker: Worker | null = null;
+  let terminateWorker: Promise<unknown> | null = null;
+  const handleAbort = () => {
+    if (!worker) {
+      return;
+    }
+    workerPromise = null;
+    terminateWorker = worker.terminate().catch(() => undefined);
+  };
 
   try {
-    const worker = await getWorker();
+    throwIfAborted(signal);
+    worker = await getWorker();
+    throwIfAborted(signal);
+    signal?.addEventListener("abort", handleAbort, { once: true });
     preparedImage = await prepareReceiptImage(image);
+    throwIfAborted(signal);
     await worker.setParameters({
       tessedit_pageseg_mode: PSM.AUTO,
       preserve_interword_spaces: "0",
@@ -71,6 +89,7 @@ async function runReceiptOcrExclusive(
       {},
       { text: true, blocks: true },
     );
+    throwIfAborted(signal);
 
     let enhancedResult: Tesseract.RecognizeResult | null = null;
     try {
@@ -86,19 +105,25 @@ async function runReceiptOcrExclusive(
         { rotateAuto: true },
         { text: true, blocks: true },
       );
-    } catch {
+    } catch (error) {
+      if (signal?.aborted) {
+        throw signal.reason ?? error;
+      }
       // The original pass remains usable if browser image preprocessing or
       // the second recognition pass is unavailable.
     } finally {
-      try {
-        await worker.setParameters({
-          tessedit_pageseg_mode: PSM.AUTO,
-          preserve_interword_spaces: "0",
-        });
-      } catch {
-        // The next run configures the page segmentation mode again.
+      if (!signal?.aborted) {
+        try {
+          await worker.setParameters({
+            tessedit_pageseg_mode: PSM.AUTO,
+            preserve_interword_spaces: "0",
+          });
+        } catch {
+          // The next run configures the page segmentation mode again.
+        }
       }
     }
+    throwIfAborted(signal);
 
     const originalText = originalResult.data.text.trim();
     const enhancedText = enhancedResult?.data.text.trim() ?? "";
@@ -125,6 +150,10 @@ async function runReceiptOcrExclusive(
       engine: "tesseract.js",
     };
   } finally {
+    signal?.removeEventListener("abort", handleAbort);
+    if (terminateWorker) {
+      await terminateWorker;
+    }
     if (preparedImage) {
       preparedImage.width = 0;
       preparedImage.height = 0;
@@ -133,6 +162,12 @@ async function runReceiptOcrExclusive(
     if (progressListener === onProgress) {
       progressListener = null;
     }
+  }
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw signal.reason ?? new DOMException("OCR解析を中止しました。", "AbortError");
   }
 }
 

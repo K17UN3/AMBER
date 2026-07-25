@@ -28,6 +28,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const analysisGenerationRef = useRef(0);
+  const analysisControllerRef = useRef<AbortController | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
   const [result, setResult] = useState<ReceiptOCRResult | null>(null);
@@ -51,9 +52,19 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
     return () => URL.revokeObjectURL(objectUrl);
   }, [selectedFile]);
 
+  useEffect(() => {
+    return () => {
+      analysisGenerationRef.current += 1;
+      analysisControllerRef.current?.abort();
+      analysisControllerRef.current = null;
+    };
+  }, []);
+
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
     analysisGenerationRef.current += 1;
+    analysisControllerRef.current?.abort();
+    analysisControllerRef.current = null;
     resetAnalysis();
 
     if (!file) {
@@ -84,6 +95,9 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
 
     const generation = analysisGenerationRef.current + 1;
     analysisGenerationRef.current = generation;
+    analysisControllerRef.current?.abort();
+    const controller = new AbortController();
+    analysisControllerRef.current = controller;
     setIsAnalyzing(true);
     setError("");
     setMessage("");
@@ -92,13 +106,17 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
     setOcrStatus("OCRを準備しています");
 
     try {
-      const analyzedResult = await runReceiptOcr(selectedFile, ({ status, progress }) => {
-        if (generation !== analysisGenerationRef.current) {
-          return;
-        }
-        setOcrStatus(toJapaneseOcrStatus(status));
-        setOcrProgress(progress);
-      });
+      const analyzedResult = await runReceiptOcr(
+        selectedFile,
+        ({ status, progress }) => {
+          if (generation !== analysisGenerationRef.current) {
+            return;
+          }
+          setOcrStatus(toJapaneseOcrStatus(status));
+          setOcrProgress(progress);
+        },
+        controller.signal,
+      );
       if (generation !== analysisGenerationRef.current) {
         return;
       }
@@ -114,6 +132,9 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
       setOcrProgress(1);
       setMessage("ブラウザ内のOCR解析が完了しました。内容を確認して保存してください。");
     } catch (requestError) {
+      if (controller.signal.aborted) {
+        return;
+      }
       if (generation === analysisGenerationRef.current) {
         const detail = requestError instanceof Error ? requestError.message : "";
         setError(
@@ -123,6 +144,9 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
         );
       }
     } finally {
+      if (analysisControllerRef.current === controller) {
+        analysisControllerRef.current = null;
+      }
       if (generation === analysisGenerationRef.current) {
         setIsAnalyzing(false);
       }
@@ -165,6 +189,8 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
 
   function clearSelection() {
     analysisGenerationRef.current += 1;
+    analysisControllerRef.current?.abort();
+    analysisControllerRef.current = null;
     setSelectedFile(null);
     resetAnalysis();
     if (fileInputRef.current) {

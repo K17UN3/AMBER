@@ -38,4 +38,29 @@ describe("createSerialTaskQueue", () => {
     await expect(first).rejects.toThrow("OCR failed");
     await expect(second).resolves.toBe("completed");
   });
+
+  it("does not start a waiting task after its signal is aborted", async () => {
+    const enqueue = createSerialTaskQueue();
+    const controller = new AbortController();
+    let finishFirst: (() => void) | undefined;
+    let secondStarted = false;
+    const firstGate = new Promise<void>((resolve) => {
+      finishFirst = resolve;
+    });
+
+    const first = enqueue(() => firstGate);
+    const second = enqueue(async () => {
+      secondStarted = true;
+    }, controller.signal);
+    const secondResult = second.catch((error: unknown) => error);
+
+    controller.abort();
+    finishFirst?.();
+    await first;
+
+    const abortError = await secondResult;
+    expect(abortError).toBeInstanceOf(DOMException);
+    expect((abortError as DOMException).name).toBe("AbortError");
+    expect(secondStarted).toBe(false);
+  });
 });

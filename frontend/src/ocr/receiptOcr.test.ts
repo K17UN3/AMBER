@@ -53,6 +53,11 @@ describe("receipt OCR field extraction", () => {
     expect(extractTotalAmount(text)).toBe(746);
   });
 
+  it("does not use cash tendered or change when the total label is missing", () => {
+    expect(extractTotalAmount("現金 5000\nお釣り 4200")).toBeNull();
+    expect(extractTotalAmount("現金 ¥5,000\nお釣り ¥4,200")).toBeNull();
+  });
+
   it("extracts a same-line total without a currency symbol", () => {
     expect(extractTotalAmount("合計 1280")).toBe(1280);
   });
