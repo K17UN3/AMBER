@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { fetchExpenses } from "../api/expenses";
+import { fetchExpenses, fetchMonthlySummary } from "../api/expenses";
 import type { DashboardSummary, User } from "../types";
 import { formatCurrency } from "../utils/format";
 import styles from "./HomePage.module.css";
@@ -21,41 +21,65 @@ export default function HomePage({ user, message, error, isSubmitting, onLogout 
     receiptCount: 0,
     recentExpenses: [],
   });
+  const [dashboardError, setDashboardError] = useState("");
 
   useEffect(() => {
     async function loadDashboard() {
+      setDashboardError("");
+
+      const today = new Date();
+      const currentMonth = today.getMonth() + 1;
+      const currentYear = today.getFullYear();
+
       try {
-        const expenses = await fetchExpenses();
-        const today = new Date();
-        const currentMonth = today.getMonth();
-        const currentYear = today.getFullYear();
+        setDashboardSummary({ totalAmount: 0, receiptCount: 0, recentExpenses: [] });
+        const summary = await fetchMonthlySummary(currentYear, currentMonth);
+        const totalAmount = summary.grand_total;
 
-        const monthlyExpenses = expenses.filter((expense) => {
-          const purchasedAt = new Date(expense.purchased_at);
-          return (
-            purchasedAt.getFullYear() === currentYear && purchasedAt.getMonth() === currentMonth
+        try {
+          const expenses = await fetchExpenses();
+          const monthlyExpenses = expenses.filter((expense) => {
+            const parts = expense.purchased_at.split("-");
+            if (parts.length !== 3) {
+              return false;
+            }
+
+            const [yearStr, monthStr] = parts;
+            const year = Number(yearStr);
+            const month = Number(monthStr);
+
+            return year === currentYear && month === currentMonth;
+          });
+
+          const recentExpenses = [...monthlyExpenses]
+            .sort((left, right) => Date.parse(right.purchased_at) - Date.parse(left.purchased_at))
+            .slice(0, 5)
+            .map((expense) => ({
+              id: expense.id,
+              shopName: expense.shop_name,
+              purchasedAt: expense.purchased_at,
+              category: expense.category,
+              totalAmount: expense.total_amount,
+            }));
+
+          setDashboardSummary({
+            totalAmount,
+            receiptCount: monthlyExpenses.length,
+            recentExpenses,
+          });
+        } catch {
+          setDashboardSummary({
+            totalAmount,
+            receiptCount: 0,
+            recentExpenses: [],
+          });
+          setDashboardError(
+            "最近の支出の読み込みに失敗しました。集計データは表示されますが、最新の支出は取得できませんでした。",
           );
-        });
-
-        const totalAmount = monthlyExpenses.reduce((sum, expense) => sum + expense.total_amount, 0);
-        const recentExpenses = [...monthlyExpenses]
-          .sort((left, right) => Date.parse(right.purchased_at) - Date.parse(left.purchased_at))
-          .slice(0, 5)
-          .map((expense) => ({
-            id: expense.id,
-            shopName: expense.shop_name,
-            purchasedAt: expense.purchased_at,
-            category: expense.category,
-            totalAmount: expense.total_amount,
-          }));
-
-        setDashboardSummary({
-          totalAmount,
-          receiptCount: monthlyExpenses.length,
-          recentExpenses,
-        });
+        }
       } catch {
         setDashboardSummary({ totalAmount: 0, receiptCount: 0, recentExpenses: [] });
+        setDashboardError("集計情報の取得に失敗しました。通信環境やログイン状態を確認してください。");
       }
     }
 
@@ -81,6 +105,7 @@ export default function HomePage({ user, message, error, isSubmitting, onLogout 
 
       {message ? <p className={styles.notice}>{message}</p> : null}
       {error ? <p className={styles.error}>{error}</p> : null}
+      {dashboardError ? <p className={styles.error}>{dashboardError}</p> : null}
 
       <section className={styles.summaryPanel} aria-labelledby="monthly-total-title">
         <div>

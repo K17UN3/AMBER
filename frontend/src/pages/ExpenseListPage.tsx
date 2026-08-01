@@ -19,6 +19,9 @@ export default function ExpenseListPage({ onLogout, isSubmitting }: ExpenseListP
 
   useEffect(() => {
     async function loadExpenses() {
+      setExpenses([]);
+      setError("");
+
       try {
         const data = await fetchExpenses();
         setExpenses(data);
@@ -58,7 +61,14 @@ export default function ExpenseListPage({ onLogout, isSubmitting }: ExpenseListP
             {expenses.map((expense) => (
               <li
                 key={expense.id}
+                tabIndex={0}
+                role="button"
                 onClick={() => navigate(`/expenses/${expense.id}`)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    navigate(`/expenses/${expense.id}`);
+                  }
+                }}
                 style={{
                   border: "1px solid #e5e7eb",
                   borderRadius: "12px",

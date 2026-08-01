@@ -3,8 +3,7 @@ from django.http import JsonResponse
 from django.urls import path
 
 from accounts.views import CsrfTokenView, CurrentUserView, LoginView, LogoutView, RegisterView
-from expenses.views import ExpenseDetailView, ExpenseListCreateView, MonthlySummaryView
-from receipts.views import ReceiptAnalyzeView
+from expenses.views import ExpenseDetailView, ExpenseListCreateView, MonthlyExpenseSummaryView
 
 
 def health_check(_request):
@@ -19,8 +18,7 @@ urlpatterns = [
     path("api/auth/register/", RegisterView.as_view(), name="auth-register"),
     path("api/auth/login/", LoginView.as_view(), name="auth-login"),
     path("api/auth/logout/", LogoutView.as_view(), name="auth-logout"),
-    path("api/expenses/", ExpenseListCreateView.as_view(), name="expense-list"),
     path("api/expenses/<int:pk>/", ExpenseDetailView.as_view(), name="expense-detail"),
-    path("api/summary/monthly/", MonthlySummaryView.as_view(), name="monthly-summary"),
-    path("api/receipts/analyze/", ReceiptAnalyzeView.as_view(), name="receipt-analyze"),
+    path("api/expenses/", ExpenseListCreateView.as_view(), name="expense-list"),
+    path("api/summary/monthly/", MonthlyExpenseSummaryView.as_view(), name="monthly-summary"),
 ]

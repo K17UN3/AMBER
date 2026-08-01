@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import status
@@ -7,6 +8,7 @@ from rest_framework.views import APIView
 
 from .models import Expense
 from .serializers import ExpenseSerializer
+from receipts.models import OCRCorrectionHistory
 
 
 class ExpenseListCreateView(APIView):
@@ -20,7 +22,28 @@ class ExpenseListCreateView(APIView):
     def post(self, request):
         serializer = ExpenseSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        expense = serializer.save(user=request.user)
+        ocr_result = serializer.validated_data.get("ocr_result")
+        with transaction.atomic():
+            expense = serializer.save(user=request.user)
+            if ocr_result:
+                OCRCorrectionHistory.objects.create(
+                    expense=expense,
+                    ocr_values={
+                        **ocr_result,
+                        "purchased_at": (
+                            ocr_result["purchased_at"].isoformat()
+                            if ocr_result["purchased_at"]
+                            else None
+                        ),
+                    },
+                    saved_values={
+                        "shop_name": expense.shop_name,
+                        "purchased_at": expense.purchased_at.isoformat(),
+                        "total_amount": expense.total_amount,
+                        "category": expense.category,
+                        "raw_ocr_text": expense.raw_ocr_text,
+                    },
+                )
         return Response(ExpenseSerializer(expense).data, status=status.HTTP_201_CREATED)
 
 
@@ -36,18 +59,13 @@ class ExpenseDetailView(APIView):
         return Response(serializer.data)
 
 
-class MonthlySummaryView(APIView):
+class MonthlyExpenseSummaryView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        today = timezone.localdate()
-        year = self._parse_query_int(request.query_params.get("year"), default=today.year)
-        month = self._parse_query_int(request.query_params.get("month"), default=today.month)
-
-        if year is None or year < 1:
-            year = today.year
-        if month is None or month < 1 or month > 12:
-            month = today.month
+        year, month, error = self._get_year_month(request)
+        if error:
+            return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
         expenses = Expense.objects.filter(
             user=request.user,
@@ -55,10 +73,12 @@ class MonthlySummaryView(APIView):
             purchased_at__month=month,
         )
 
-        categories = list(
-            expenses.values("category").annotate(total=Sum("total_amount")).order_by("category")
-        )
         grand_total = expenses.aggregate(total=Sum("total_amount"))["total"] or 0
+        categories = (
+            expenses.values("category")
+            .annotate(total=Sum("total_amount"))
+            .order_by("category")
+        )
 
         return Response(
             {
@@ -72,11 +92,20 @@ class MonthlySummaryView(APIView):
             }
         )
 
-    def _parse_query_int(self, value, default):
-        if value in (None, ""):
-            return default
+    def _get_year_month(self, request):
+        today = timezone.localdate()
+        year_value = request.query_params.get("year", today.year)
+        month_value = request.query_params.get("month", today.month)
 
         try:
-            return int(value)
+            year = int(year_value)
+            month = int(month_value)
         except (TypeError, ValueError):
-            return default
+            return None, None, {"detail": "year and month must be integers."}
+
+        if year < 1:
+            return None, None, {"detail": "year must be greater than or equal to 1."}
+        if month < 1 or month > 12:
+            return None, None, {"detail": "month must be between 1 and 12."}
+
+        return year, month, None

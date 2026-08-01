@@ -39,6 +39,7 @@ export default function MonthlySummaryPage({ onLogout, isSubmitting }: MonthlySu
     async function loadSummary() {
       setIsLoading(true);
       setError("");
+      setSummary(null);
 
       try {
         const data = await fetchMonthlySummary(currentYear, currentMonth);

@@ -20,6 +20,9 @@ export default function ExpenseDetailPage({ onLogout, isSubmitting }: ExpenseDet
 
   useEffect(() => {
     async function loadExpense() {
+      setExpense(null);
+      setError("");
+
       try {
         const id = Number(expenseId);
         if (!Number.isInteger(id)) {
