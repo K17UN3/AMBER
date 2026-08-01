@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import status
@@ -7,6 +8,7 @@ from rest_framework.views import APIView
 
 from .models import Expense
 from .serializers import ExpenseSerializer
+from receipts.models import OCRCorrectionHistory
 
 
 class ExpenseListCreateView(APIView):
@@ -20,7 +22,28 @@ class ExpenseListCreateView(APIView):
     def post(self, request):
         serializer = ExpenseSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        expense = serializer.save(user=request.user)
+        ocr_result = serializer.validated_data.get("ocr_result")
+        with transaction.atomic():
+            expense = serializer.save(user=request.user)
+            if ocr_result:
+                OCRCorrectionHistory.objects.create(
+                    expense=expense,
+                    ocr_values={
+                        **ocr_result,
+                        "purchased_at": (
+                            ocr_result["purchased_at"].isoformat()
+                            if ocr_result["purchased_at"]
+                            else None
+                        ),
+                    },
+                    saved_values={
+                        "shop_name": expense.shop_name,
+                        "purchased_at": expense.purchased_at.isoformat(),
+                        "total_amount": expense.total_amount,
+                        "category": expense.category,
+                        "raw_ocr_text": expense.raw_ocr_text,
+                    },
+                )
         return Response(ExpenseSerializer(expense).data, status=status.HTTP_201_CREATED)
 
 

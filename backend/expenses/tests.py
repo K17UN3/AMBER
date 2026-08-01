@@ -2,8 +2,10 @@ from django.contrib.auth import get_user_model
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APITestCase
+from unittest.mock import patch
 
 from .models import Expense
+from receipts.models import OCRCorrectionHistory
 
 
 User = get_user_model()
@@ -65,6 +67,74 @@ class ExpenseApiTests(APITestCase):
         self.assertEqual(expense.user, self.user)
         self.assertEqual(response.data["user"], self.user.id)
         self.assertEqual(response.data["shop_name"], "アンバーマート")
+
+    def test_expense_create_records_ocr_correction_history(self):
+        self.client.force_authenticate(self.user)
+        ocr_result = {
+            "shop_name": "OCR店名",
+            "purchased_at": "2026-06-13",
+            "total_amount": 1200,
+            "raw_ocr_text": "OCR店名\n合計 1200",
+            "confidence": 91.5,
+            "engine": "tesseract.js",
+        }
+
+        response = self.client.post(
+            reverse("expense-list"),
+            {**self.payload, "ocr_result": ocr_result, "shop_name": "修正後の店名"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        history = OCRCorrectionHistory.objects.get()
+        self.assertEqual(history.expense_id, response.data["id"])
+        self.assertEqual(history.ocr_values["shop_name"], "OCR店名")
+        self.assertEqual(history.ocr_values["engine"], "tesseract.js")
+        self.assertEqual(history.saved_values["shop_name"], "修正後の店名")
+        self.assertNotIn("ocr_result", response.data)
+
+    def test_expense_create_rolls_back_when_history_creation_fails(self):
+        self.client.force_authenticate(self.user)
+        ocr_result = {
+            "shop_name": None,
+            "purchased_at": None,
+            "total_amount": None,
+            "raw_ocr_text": "",
+            "confidence": 0,
+            "engine": "tesseract.js",
+        }
+
+        with patch("expenses.views.OCRCorrectionHistory.objects.create", side_effect=RuntimeError("history failed")):
+            with self.assertRaises(RuntimeError):
+                self.client.post(
+                    reverse("expense-list"),
+                    {**self.payload, "ocr_result": ocr_result},
+                    format="json",
+                )
+
+        self.assertEqual(Expense.objects.count(), 0)
+
+    def test_expense_create_rejects_unknown_ocr_engine(self):
+        self.client.force_authenticate(self.user)
+
+        response = self.client.post(
+            reverse("expense-list"),
+            {
+                **self.payload,
+                "ocr_result": {
+                    "shop_name": None,
+                    "purchased_at": None,
+                    "total_amount": None,
+                    "raw_ocr_text": "",
+                    "confidence": 0,
+                    "engine": "unknown",
+                },
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("engine", response.data["ocr_result"])
 
     def test_expense_create_validates_required_fields(self):
         self.client.force_authenticate(self.user)

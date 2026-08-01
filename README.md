@@ -123,14 +123,14 @@ OCRで文字を読み取る
 | バックエンド | Python / Django |
 | データベース | SQLite / PostgreSQL |
 | 認証 | Django標準認証機能を利用したセッション認証 |
-| OCR | Google Cloud Vision API |
+| OCR | Tesseract.js（ブラウザ内のWebAssembly / Web Worker） |
 | デプロイ | Vercel（フロントエンド） / Render Web Service（バックエンド） / Render PostgreSQL |
 
 ## 技術構成の理由
 
 - アプリ開発未経験でも、スマホ対応Webアプリなら実装しやすい
 - Djangoで認証、DB、画像アップロード、集計処理をまとめて実装できる
-- OCRは外部APIを使うことで、レシート読み取り機能を実現しやすい
+- OCRはTesseract.jsをブラウザ内で実行し、画像を外部サーバーへ送らず無課金で利用できる
 - Bootstrapを使うことで、画面デザインを短時間で整えやすい
 - 発表時に「レシート登録 → OCR → 保存 → 月次合計反映」の流れを見せやすい
 
@@ -230,10 +230,9 @@ SECRET_KEY=your-secret-key
 DEBUG=True
 CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
-GOOGLE_APPLICATION_CREDENTIALS=path/to/google-credentials.json
 ```
 
-注意：`.env` やGoogle Cloudの認証情報ファイルはGitHubにアップロードしないでください。
+注意：`.env` や本番環境の接続情報はGitHubにアップロードしないでください。
 
 ## デプロイ設定
 
@@ -272,6 +271,16 @@ Render では `render.yaml` を使って Django API と Render PostgreSQL を定
 
 Render Web Service と Render PostgreSQL が同じ workspace かつ同じ region にある場合は、PostgreSQL の internal connection string を使います。
 別 region や別 workspace の internal connection string は名前解決できないため、同じ region にそろえるか、必要に応じて external connection string を使います。
+
+### OCR: 無課金のフロントエンド構成
+
+レシート画像はDjango APIへアップロードせず、Vercelで配信するReactアプリ上のTesseract.jsで解析します。日本語・英語の学習データは初回利用時にブラウザへダウンロードされ、以後はキャッシュが利用されます。OCR用API、共有画像ストレージ、Render Background Worker、外部OCR APIの利用料は不要です。
+
+複数画像を続けて解析するときは、同じWeb Workerを再利用します。認識は元画像の自動レイアウト解析と、グレースケール・コントラスト強調・自動回転を施した単一ブロック解析の2パスで行い、店名・購入日・合計金額を統合します。「合計」の文字が崩れた場合は、税込対象額や繰り返し出現する通貨額から合計候補を補完します。
+
+認識した店名・購入日・合計金額・OCR全文と信頼度だけを、ユーザーが内容を確認して支出を保存するときにDjango APIへ送信します。レシート画像そのものは送信・保存しません。信頼度が70%未満の場合は、入力値とレシート画像の照合を促す警告を表示します。
+
+初回の学習データ取得にはネットワーク接続が必要です。初回から完全オフラインにする場合は、Tesseract.jsのWorker、WASM、`jpn` / `eng`の`traineddata`を自サイトから配信する構成へ変更してください。
 
 ### Render PostgreSQL 接続確認
 
@@ -409,7 +418,7 @@ Djangoのログイン処理とつなげます。
 |---|---|
 | フロントエンド担当 | 画面作成、CSS調整、スマホ対応 |
 | バックエンド担当 | Djangoの処理、DB、認証 |
-| OCR担当 | Google Cloud Vision API連携、OCR結果処理 |
+| OCR担当 | Tesseract.js連携、ブラウザ内のOCR結果処理 |
 | DB担当 | モデル設計、マイグレーション、データ保存 |
 | 発表・資料担当 | 発表スライド、デモ準備、README整理 |
 

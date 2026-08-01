@@ -3,12 +3,13 @@ import type { ChangeEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { saveExpense } from "../api/expenses";
-import { analyzeReceiptImage } from "../api/receipts";
-import type { ExpenseSavePayload, ReceiptAnalyzeResult } from "../types";
+import { runReceiptOcr, toClientOCRResult } from "../ocr/receiptOcr";
+import type { ExpenseSavePayload, ReceiptOCRResult } from "../types";
 import { readableError } from "../utils/errors";
 import styles from "./ReceiptUploadPage.module.css";
 
 const maxImageSize = 10 * 1024 * 1024;
+const lowConfidenceThreshold = 70;
 const categories = ["食費", "日用品", "交通費", "医療費", "娯楽", "その他"];
 const initialConfirmForm: ExpenseSavePayload = {
   shop_name: "",
@@ -26,13 +27,17 @@ type ReceiptUploadPageProps = {
 export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUploadPageProps) {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const analysisGenerationRef = useRef(0);
+  const analysisControllerRef = useRef<AbortController | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
-  const [result, setResult] = useState<ReceiptAnalyzeResult | null>(null);
+  const [result, setResult] = useState<ReceiptOCRResult | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState(0);
+  const [ocrStatus, setOcrStatus] = useState("");
   const [confirmForm, setConfirmForm] = useState<ExpenseSavePayload>(initialConfirmForm);
 
   useEffect(() => {
@@ -47,11 +52,20 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
     return () => URL.revokeObjectURL(objectUrl);
   }, [selectedFile]);
 
+  useEffect(() => {
+    return () => {
+      analysisGenerationRef.current += 1;
+      analysisControllerRef.current?.abort();
+      analysisControllerRef.current = null;
+    };
+  }, []);
+
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
-    setResult(null);
-    setMessage("");
-    setError("");
+    analysisGenerationRef.current += 1;
+    analysisControllerRef.current?.abort();
+    analysisControllerRef.current = null;
+    resetAnalysis();
 
     if (!file) {
       setSelectedFile(null);
@@ -79,13 +93,34 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
       return;
     }
 
+    const generation = analysisGenerationRef.current + 1;
+    analysisGenerationRef.current = generation;
+    analysisControllerRef.current?.abort();
+    const controller = new AbortController();
+    analysisControllerRef.current = controller;
     setIsAnalyzing(true);
     setError("");
     setMessage("");
     setResult(null);
+    setOcrProgress(0);
+    setOcrStatus("OCRを準備しています");
 
     try {
-      const analyzedResult = await analyzeReceiptImage(selectedFile);
+      const analyzedResult = await runReceiptOcr(
+        selectedFile,
+        ({ status, progress }) => {
+          if (generation !== analysisGenerationRef.current) {
+            return;
+          }
+          setOcrStatus(toJapaneseOcrStatus(status));
+          setOcrProgress(progress);
+        },
+        controller.signal,
+      );
+      if (generation !== analysisGenerationRef.current) {
+        return;
+      }
+
       setResult(analyzedResult);
       setConfirmForm({
         shop_name: analyzedResult.shop_name ?? "",
@@ -94,11 +129,27 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
         category: "その他",
         raw_ocr_text: analyzedResult.raw_ocr_text,
       });
-      setMessage(analyzedResult.detail ?? "画像をアップロードしました。");
+      setOcrProgress(1);
+      setMessage("ブラウザ内のOCR解析が完了しました。内容を確認して保存してください。");
     } catch (requestError) {
-      setError(readableError(requestError));
+      if (controller.signal.aborted) {
+        return;
+      }
+      if (generation === analysisGenerationRef.current) {
+        const detail = requestError instanceof Error ? requestError.message : "";
+        setError(
+          detail
+            ? `OCR解析に失敗しました（${detail}）。画像を選び直して、もう一度お試しください。`
+            : "OCR解析に失敗しました。画像を選び直して、もう一度お試しください。",
+        );
+      }
     } finally {
-      setIsAnalyzing(false);
+      if (analysisControllerRef.current === controller) {
+        analysisControllerRef.current = null;
+      }
+      if (generation === analysisGenerationRef.current) {
+        setIsAnalyzing(false);
+      }
     }
   }
 
@@ -114,7 +165,10 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
     setMessage("");
 
     try {
-      const savedExpense = await saveExpense(confirmForm);
+      const payload = result
+        ? { ...confirmForm, ocr_result: toClientOCRResult(result) }
+        : confirmForm;
+      const savedExpense = await saveExpense(payload);
       navigate("/receipts/complete", { state: { expense: savedExpense } });
     } catch (requestError) {
       setError(readableError(requestError));
@@ -123,12 +177,22 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
     }
   }
 
-  function clearSelection() {
-    setSelectedFile(null);
+  function resetAnalysis() {
+    setIsAnalyzing(false);
     setResult(null);
     setConfirmForm(initialConfirmForm);
+    setOcrProgress(0);
+    setOcrStatus("");
     setMessage("");
     setError("");
+  }
+
+  function clearSelection() {
+    analysisGenerationRef.current += 1;
+    analysisControllerRef.current?.abort();
+    analysisControllerRef.current = null;
+    setSelectedFile(null);
+    resetAnalysis();
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -161,6 +225,11 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
 
       {message && <p className={styles.notice}>{message}</p>}
       {error && <p className={styles.error}>{error}</p>}
+      {result && result.confidence < lowConfidenceThreshold && (
+        <p className={styles.warning}>
+          OCRの信頼度が低いため、店名・購入日・合計金額をレシート画像と照合してください。
+        </p>
+      )}
 
       <section className={styles.uploadPanel} aria-label="レシート画像アップロード">
         <label className={styles.dropArea}>
@@ -168,13 +237,14 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
             +
           </span>
           <strong>{hasSelection ? selectedFile.name : "レシート画像を選択"}</strong>
-          <small>スマホではカメラ起動、PCでは画像ファイル選択に対応しています。</small>
+          <small>画像はサーバーへ送信せず、このブラウザ内だけでOCR解析します。</small>
           <input
             ref={fileInputRef}
             type="file"
             accept="image/*"
             capture="environment"
             onChange={handleFileChange}
+            disabled={isAnalyzing}
           />
         </label>
 
@@ -195,7 +265,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
           type="button"
           className={styles.primaryButton}
           onClick={handleAnalyze}
-          disabled={!hasSelection || isAnalyzing || isSaving}
+          disabled={!hasSelection || isBusy}
         >
           {isAnalyzing ? "解析中..." : "OCR解析へ進む"}
         </button>
@@ -212,7 +282,9 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
       {isAnalyzing && (
         <section className={styles.loadingPanel} aria-live="polite">
           <span className={styles.spinner} aria-hidden="true" />
-          <strong>画像を送信しています</strong>
+          <strong>{ocrStatus}</strong>
+          <progress value={ocrProgress} max={1} aria-label="OCR解析の進捗" />
+          <small>{Math.round(ocrProgress * 100)}%</small>
         </section>
       )}
 
@@ -223,7 +295,9 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
               <p className={styles.eyebrow}>確認・修正</p>
               <h2 id="receipt-result-title">支出として保存</h2>
             </div>
-            <span>{result.image?.name ?? selectedFile?.name ?? "-"}</span>
+            <span>
+              {selectedFile?.name ?? "-"}・信頼度 {Math.round(result.confidence)}%
+            </span>
           </div>
 
           <div className={styles.formGrid}>
@@ -324,4 +398,15 @@ function validateConfirmForm(form: ExpenseSavePayload) {
   }
 
   return "";
+}
+
+function toJapaneseOcrStatus(status: string) {
+  const labels: Record<string, string> = {
+    "loading tesseract core": "OCRエンジンを読み込んでいます",
+    "initializing tesseract": "OCRエンジンを初期化しています",
+    "loading language traineddata": "日本語・英語モデルを読み込んでいます",
+    "initializing api": "文字認識を準備しています",
+    "recognizing text": "レシートの文字を読み取っています",
+  };
+  return labels[status] ?? "OCRを準備しています";
 }
