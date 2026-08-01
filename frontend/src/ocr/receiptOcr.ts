@@ -12,7 +12,7 @@ type ProgressListener = (message: LoggerMessage) => void;
 const totalKeywords = /(?:合\s*(?:計|言\s*[十ニ二])|言\s*[十ニ二]|お\s*買\s*上(?:げ)?\s*金\s*額|ご\s*請\s*求\s*額|現\s*計|総\s*額)/;
 const datePattern = /(?<year>20\d{2})\s*(?:\/|\.|年)\s*(?<month>\d{1,2})\s*(?:\/|\.|月)\s*(?<day>\d{1,2})(?:日)?/;
 const currencyAmountPattern = /(?:¥|￥|\\|Y)\s*([0-9]{1,3}(?:[,.]\s?[0-9]{3})+|[0-9]+)/gi;
-const plainAmountPattern = /(?:^|[^0-9])([0-9]{1,3}(?:[,.]\s?[0-9]{3})+|[0-9]+)(?![0-9])/g;
+const plainAmountPattern = /(?<![0-9A-Za-z])([0-9]{1,3}(?:[,.]\s?[0-9]{3})+|[0-9]+)(?![0-9A-Za-z])/g;
 const nonTotalAmountLine = /(?:現\s*金|お\s*預|預\s*り|釣|お\s*つ\s*り|消費\s*税|税\s*額)/;
 const maxReceiptImageSide = 2200;
 const maxReceiptImagePixels = 4_000_000;
@@ -258,25 +258,23 @@ export function extractTotalAmount(rawText: string) {
   const lines = rawText.split(/\r?\n/).map((line) => line.normalize("NFKC"));
 
   for (const [index, line] of lines.entries()) {
-    if (!totalKeywords.test(line)) {
+    const keywordMatch = totalKeywords.exec(line);
+    if (!keywordMatch) {
       continue;
     }
 
-    const sameLineAmounts = extractContextualAmounts(line);
-    const plausibleSameLineAmounts = sameLineAmounts.filter((amount) => amount >= 100);
-    if (plausibleSameLineAmounts.length > 0) {
-      return Math.max(...plausibleSameLineAmounts);
+    const afterKeyword = line.slice(keywordMatch.index + keywordMatch[0].length);
+    const sameLineAmount = extractPrioritizedTotalAmount(afterKeyword);
+    if (sameLineAmount !== null) {
+      return sameLineAmount;
     }
 
-    const nearbyLines = [lines[index + 1]].filter(
-      (nearby): nearby is string =>
-        nearby !== undefined && !nonTotalAmountLine.test(nearby),
-    );
-    const nearbyAmounts = nearbyLines
-      .flatMap(extractContextualAmounts)
-      .filter((amount) => amount >= 100);
-    if (nearbyAmounts.length > 0) {
-      return Math.max(...nearbyAmounts);
+    const nextLine = lines[index + 1];
+    if (nextLine !== undefined && !nonTotalAmountLine.test(nextLine)) {
+      const nextLineAmount = extractPrioritizedTotalAmount(nextLine);
+      if (nextLineAmount !== null) {
+        return nextLineAmount;
+      }
     }
   }
 
@@ -311,15 +309,66 @@ function extractCurrencyAmounts(line: string) {
     .filter((amount) => Number.isSafeInteger(amount) && amount > 0);
 }
 
-function extractContextualAmounts(line: string) {
-  const amounts = [
-    ...extractCurrencyAmounts(line),
-    ...[...line.matchAll(plainAmountPattern)].map((match) =>
-      Number(match[1].replace(/[\s,.]/g, "")),
+function extractPrioritizedTotalAmount(value: string) {
+  const sanitized = value
+    .replace(
+      /20\d{2}\s*(?:[\/.\-]|年)\s*\d{1,2}\s*(?:[\/.\-]|月)\s*\d{1,2}(?:\s*日)?/g,
+      " ",
+    )
+    .replace(/\d{1,2}\s*:\s*\d{2}(?::\s*\d{2})?/g, " ")
+    .replace(/\d+(?:\.\d+)?\s*[%％]/g, " ")
+    .replace(/\d+\s*(?:点|個|品|件)/g, " ");
+
+  const candidates = [
+    ...extractAmountCandidates(sanitized, currencyAmountPattern, true),
+    ...extractAmountCandidates(sanitized, plainAmountPattern, false),
+  ].sort(
+    (candidateA, candidateB) =>
+      candidateA.start - candidateB.start ||
+      Number(candidateB.hasCurrency) - Number(candidateA.hasCurrency),
+  );
+
+  const directlyAfterKeyword = candidates.find((candidate) =>
+    /^[\s:：=＝\-ー—~～()（）[\]【】]*$/.test(
+      sanitized.slice(0, candidate.start),
     ),
-  ];
-  return [...new Set(amounts)].filter(
-    (amount) => Number.isSafeInteger(amount) && amount > 0,
+  );
+  return (
+    directlyAfterKeyword?.amount ??
+    candidates.find((candidate) => candidate.hasCurrency)?.amount ??
+    candidates[0]?.amount ??
+    null
+  );
+}
+
+function extractAmountCandidates(
+  value: string,
+  pattern: RegExp,
+  hasCurrency: boolean,
+) {
+  return [...value.matchAll(pattern)].flatMap((match) => {
+    const amount = Number(match[1].replace(/[\s,.]/g, ""));
+    const start = match.index ?? 0;
+    const end = start + match[0].length;
+    if (
+      !Number.isSafeInteger(amount) ||
+      amount <= 0 ||
+      hasInvalidAmountSuffix(value.slice(end))
+    ) {
+      return [];
+    }
+    return [{ amount, start, hasCurrency }];
+  });
+}
+
+function hasInvalidAmountSuffix(value: string) {
+  const suffix = value.trimStart();
+  if (/^(?:点|個|品|件)/.test(suffix)) {
+    return true;
+  }
+  return (
+    /^[A-Za-zァ-ヶ一-龯々〆ヵヶ]/.test(suffix) &&
+    !/^(?:円|税込|税)/.test(suffix)
   );
 }
 

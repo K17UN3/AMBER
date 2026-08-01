@@ -65,6 +65,22 @@ describe("receipt OCR field extraction", () => {
   it("extracts a following-line total without a currency symbol", () => {
     expect(extractTotalAmount("合計\n1280")).toBe(1280);
   });
+
+  it("extracts a total below 100 yen", () => {
+    expect(extractTotalAmount("合計 ¥80")).toBe(80);
+  });
+
+  it("does not use a receipt date as the total", () => {
+    expect(extractTotalAmount("2026/07/25 合計 ¥746")).toBe(746);
+  });
+
+  it("does not use a time, percentage, or item count as the total", () => {
+    expect(extractTotalAmount("合計 9:10 2点 8%対象 ¥746")).toBe(746);
+  });
+
+  it("prefers a currency amount over unrelated metadata after the keyword", () => {
+    expect(extractTotalAmount("合計 注文No. 2026 ¥746")).toBe(746);
+  });
 });
 
 describe("receipt OCR image sizing", () => {
