@@ -168,7 +168,7 @@ export default function ReceiptUploadPage({ onLogout, isSubmitting }: ReceiptUpl
       const payload = result
         ? { ...confirmForm, ocr_result: toClientOCRResult(result) }
         : confirmForm;
-      const savedExpense = await saveExpense(payload);
+      const savedExpense = await saveExpense(payload, selectedFile);
       navigate("/receipts/complete", { state: { expense: savedExpense } });
     } catch (requestError) {
       setError(readableError(requestError));

@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from .image_storage import signed_receipt_image_url
 from .models import Expense
 
 
@@ -14,6 +15,7 @@ class ClientOCRResultSerializer(serializers.Serializer):
 
 class ExpenseSerializer(serializers.ModelSerializer):
     user = serializers.PrimaryKeyRelatedField(read_only=True)
+    image = serializers.SerializerMethodField()
     ocr_result = ClientOCRResultSerializer(write_only=True, required=False)
 
     class Meta:
@@ -36,6 +38,15 @@ class ExpenseSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data.pop("ocr_result", None)
         return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data.pop("ocr_result", None)
+        return super().update(instance, validated_data)
+
+    def get_image(self, expense):
+        if expense.image_public_id:
+            return signed_receipt_image_url(expense.image_public_id, expense.image_format)
+        return expense.image
 
     def validate_category(self, value):
         if not value.strip():

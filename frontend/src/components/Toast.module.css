@@ -1,0 +1,35 @@
+.toast {
+  position: fixed;
+  z-index: 50;
+  right: 20px;
+  bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  max-width: min(420px, calc(100% - 32px));
+  padding: 12px 14px;
+  border: 1px solid #8bb29d;
+  border-radius: 6px;
+  background: #173f31;
+  color: #fff;
+  box-shadow: 0 10px 30px rgb(24 45 35 / 20%);
+}
+
+.toast button {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 22px;
+  line-height: 1;
+}
+
+@media (max-width: 560px) {
+  .toast {
+    right: 16px;
+    bottom: 16px;
+    left: 16px;
+    max-width: none;
+  }
+}
