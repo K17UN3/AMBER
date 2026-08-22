@@ -1,3 +1,5 @@
+import json
+
 from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
@@ -16,6 +18,7 @@ from .image_storage import (
 )
 from .models import Expense
 from .serializers import ExpenseSerializer
+from receipts.models import OCRCorrectionHistory
 
 
 class ImageStorageUnavailable(APIException):
@@ -36,17 +39,35 @@ class ExpenseListCreateView(APIView):
         data, image = _expense_request_data(request)
         serializer = ExpenseSerializer(data=data)
         serializer.is_valid(raise_exception=True)
-
+        ocr_result = serializer.validated_data.get("ocr_result")
         uploaded_image = _upload_image_or_error(image, request.user.id)
         image_values = _uploaded_image_values(uploaded_image)
         try:
             with transaction.atomic():
                 expense = serializer.save(user=request.user, **image_values)
+                if ocr_result:
+                    OCRCorrectionHistory.objects.create(
+                        expense=expense,
+                        ocr_values={
+                            **ocr_result,
+                            "purchased_at": (
+                                ocr_result["purchased_at"].isoformat()
+                                if ocr_result["purchased_at"]
+                                else None
+                            ),
+                        },
+                        saved_values={
+                            "shop_name": expense.shop_name,
+                            "purchased_at": expense.purchased_at.isoformat(),
+                            "total_amount": expense.total_amount,
+                            "category": expense.category,
+                            "raw_ocr_text": expense.raw_ocr_text,
+                        },
+                    )
         except Exception:
             if uploaded_image:
-                delete_receipt_image(uploaded_image[1])
+                delete_receipt_image(uploaded_image.public_id)
             raise
-
         return Response(ExpenseSerializer(expense).data, status=status.HTTP_201_CREATED)
 
 
@@ -87,9 +108,6 @@ class ExpenseDetailView(APIView):
         old_public_id = expense.image_public_id
         image_values = _uploaded_image_values(uploaded_image)
 
-        if image is None and "image" in data and data.get("image") != expense.image:
-            image_values["image_public_id"] = ""
-
         try:
             with transaction.atomic():
                 expense = serializer.save(**image_values)
@@ -99,7 +117,7 @@ class ExpenseDetailView(APIView):
                     )
         except Exception:
             if uploaded_image:
-                delete_receipt_image(uploaded_image[1])
+                delete_receipt_image(uploaded_image.public_id)
             raise
 
         return Response(ExpenseSerializer(expense).data)
@@ -117,8 +135,13 @@ def _expense_request_data(request):
     if image is None:
         return request.data, None
 
-    data = request.data.copy()
-    data.pop("image", None)
+    data = {key: value for key, value in request.data.items() if key != "image"}
+    ocr_result = data.get("ocr_result")
+    if isinstance(ocr_result, str):
+        try:
+            data["ocr_result"] = json.loads(ocr_result)
+        except json.JSONDecodeError as exc:
+            raise ValidationError({"ocr_result": ["OCR解析結果の形式が不正です。"]}) from exc
     return data, image
 
 
@@ -137,8 +160,11 @@ def _upload_image_or_error(image, user_id):
 def _uploaded_image_values(uploaded_image):
     if uploaded_image is None:
         return {}
-    image_url, public_id = uploaded_image
-    return {"image": image_url, "image_public_id": public_id}
+    return {
+        "image": uploaded_image.url,
+        "image_public_id": uploaded_image.public_id,
+        "image_format": uploaded_image.format,
+    }
 
 
 class MonthlyExpenseSummaryView(APIView):

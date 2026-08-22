@@ -10,6 +10,7 @@ class Expense(models.Model):
     category = models.CharField(max_length=50)
     image = models.URLField(blank=True)
     image_public_id = models.CharField(max_length=255, blank=True)
+    image_format = models.CharField(max_length=20, blank=True)
     raw_ocr_text = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

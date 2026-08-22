@@ -31,18 +31,16 @@ export type DashboardSummary = {
   recentExpenses: RecentExpense[];
 };
 
-export type ReceiptAnalyzeResult = {
+export type ReceiptOCRResult = {
   shop_name: string | null;
   purchased_at: string | null;
   total_amount: number | null;
   raw_ocr_text: string;
-  image?: {
-    name: string;
-    size: number;
-    content_type: string;
-  };
-  detail?: string;
+  confidence: number;
+  engine: "tesseract.js";
 };
+
+export type ClientOCRResult = ReceiptOCRResult;
 
 export type ExpenseSavePayload = {
   shop_name: string;
@@ -50,6 +48,7 @@ export type ExpenseSavePayload = {
   total_amount: number;
   category: string;
   raw_ocr_text: string;
+  ocr_result?: ClientOCRResult;
 };
 
 export type SavedExpense = ExpenseSavePayload & {

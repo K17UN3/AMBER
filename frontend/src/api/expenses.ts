@@ -51,6 +51,9 @@ function buildExpenseFormData(payload: ExpenseSavePayload, image: File) {
   formData.append("total_amount", String(payload.total_amount));
   formData.append("category", payload.category);
   formData.append("raw_ocr_text", payload.raw_ocr_text);
+  if (payload.ocr_result) {
+    formData.append("ocr_result", JSON.stringify(payload.ocr_result));
+  }
   formData.append("image", image);
   return formData;
 }
