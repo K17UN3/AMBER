@@ -1,5 +1,9 @@
 import axios, { type AxiosError } from "axios";
 
+function isMissingApiBaseUrlError(error: unknown) {
+  return axios.isAxiosError(error) && error.message.includes("Unexpected token") && error.config?.baseURL === "http://localhost:8000/api";
+}
+
 type ErrorResponse = {
   detail?: string;
   [key: string]: unknown;

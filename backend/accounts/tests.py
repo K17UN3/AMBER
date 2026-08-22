@@ -1,10 +1,44 @@
+import os
+from importlib import reload
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
-from django.test import override_settings
+from django.test import SimpleTestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient, APITestCase
 
 
 User = get_user_model()
+
+
+class SettingsTests(SimpleTestCase):
+    def test_vercel_frontend_defaults_are_scoped_to_the_configured_project(self):
+        with patch.dict(
+            os.environ,
+            {
+                "FRONTEND_ORIGIN": "https://amber-lilac.vercel.app",
+                "FRONTEND_PREVIEW_ORIGINS": "https://amber-lilac-git-feature-vercel-repair-hyosetsus-projects.vercel.app",
+            },
+            clear=False,
+        ):
+            import config.settings as settings_module
+
+            reloaded_settings = reload(settings_module)
+
+            self.assertIn("https://amber-lilac.vercel.app", reloaded_settings.CORS_ALLOWED_ORIGINS)
+            self.assertIn("https://amber-lilac.vercel.app", reloaded_settings.CORS_ALLOWED_ORIGINS)
+            self.assertIn(
+                "https://amber-lilac-git-feature-vercel-repair-hyosetsus-projects.vercel.app",
+                reloaded_settings.CORS_ALLOWED_ORIGINS,
+            )
+            self.assertIn("https://amber-lilac.vercel.app", reloaded_settings.CSRF_TRUSTED_ORIGINS)
+            self.assertIn(
+                "https://amber-lilac-git-feature-vercel-repair-hyosetsus-projects.vercel.app",
+                reloaded_settings.CSRF_TRUSTED_ORIGINS,
+            )
+            self.assertNotIn("https://*.vercel.app", reloaded_settings.CSRF_TRUSTED_ORIGINS)
+            self.assertNotIn("https://amber-lilac-attacker.vercel.app", reloaded_settings.CORS_ALLOWED_ORIGINS)
+            self.assertNotIn("https://attacker.vercel.app", reloaded_settings.CORS_ALLOWED_ORIGINS)
 
 
 @override_settings(ROOT_URLCONF="config.urls")
