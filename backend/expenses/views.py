@@ -16,8 +16,13 @@ from .image_storage import (
     delete_receipt_image,
     upload_receipt_image,
 )
-from .models import Expense
-from .serializers import ExpenseSerializer
+from .models import Category, Expense
+from .serializers import (
+    CategoryClassificationInputSerializer,
+    CategorySerializer,
+    ExpenseSerializer,
+)
+from .services import classify_category
 from receipts.models import OCRCorrectionHistory
 
 
@@ -26,12 +31,29 @@ class ImageStorageUnavailable(APIException):
     default_code = "image_storage_unavailable"
 
 
+class CategoryListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(CategorySerializer(Category.objects.all(), many=True).data)
+
+
+class CategoryClassifyView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = CategoryClassificationInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        category = classify_category(**serializer.validated_data)
+        return Response(CategorySerializer(category).data)
+
+
 class ExpenseListCreateView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def get(self, request):
-        expenses = Expense.objects.filter(user=request.user)
+        expenses = Expense.objects.filter(user=request.user).select_related("category")
         serializer = ExpenseSerializer(expenses, many=True)
         return Response(serializer.data)
 
@@ -46,6 +68,12 @@ class ExpenseListCreateView(APIView):
             with transaction.atomic():
                 expense = serializer.save(user=request.user, **image_values)
                 if ocr_result:
+                    automatic_category = ocr_result.get("category")
+                    if automatic_category is None:
+                        automatic_category = classify_category(
+                            shop_name=ocr_result.get("shop_name") or "",
+                            raw_ocr_text=ocr_result.get("raw_ocr_text") or "",
+                        ).name
                     OCRCorrectionHistory.objects.create(
                         expense=expense,
                         ocr_values={
@@ -55,12 +83,13 @@ class ExpenseListCreateView(APIView):
                                 if ocr_result["purchased_at"]
                                 else None
                             ),
+                            "category": automatic_category,
                         },
                         saved_values={
                             "shop_name": expense.shop_name,
                             "purchased_at": expense.purchased_at.isoformat(),
                             "total_amount": expense.total_amount,
-                            "category": expense.category,
+                            "category": expense.category.name,
                             "raw_ocr_text": expense.raw_ocr_text,
                         },
                     )
@@ -124,7 +153,11 @@ class ExpenseDetailView(APIView):
 
     @staticmethod
     def _get_expense(request, pk):
-        expense = Expense.objects.filter(user=request.user, pk=pk).first()
+        expense = (
+            Expense.objects.filter(user=request.user, pk=pk)
+            .select_related("category")
+            .first()
+        )
         if expense is None:
             raise NotFound()
         return expense
@@ -183,9 +216,9 @@ class MonthlyExpenseSummaryView(APIView):
 
         grand_total = expenses.aggregate(total=Sum("total_amount"))["total"] or 0
         categories = (
-            expenses.values("category")
+            expenses.values("category__name")
             .annotate(total=Sum("total_amount"))
-            .order_by("category")
+            .order_by("category__name")
         )
 
         return Response(
@@ -194,7 +227,7 @@ class MonthlyExpenseSummaryView(APIView):
                 "month": month,
                 "grand_total": grand_total,
                 "categories": [
-                    {"category": item["category"], "total": item["total"] or 0}
+                    {"category": item["category__name"], "total": item["total"] or 0}
                     for item in categories
                 ],
             }

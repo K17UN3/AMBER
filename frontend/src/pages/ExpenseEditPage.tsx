@@ -2,13 +2,13 @@ import { useEffect, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import { fetchExpenseDetail, updateExpense } from "../api/expenses";
-import type { ExpenseSavePayload, SavedExpense } from "../types";
+import { fetchCategories, fetchExpenseDetail, updateExpense } from "../api/expenses";
+import CategorySelect from "../components/CategorySelect";
+import type { Category, ExpenseSavePayload, SavedExpense } from "../types";
 import { readableError } from "../utils/errors";
 import styles from "./ExpenseEditPage.module.css";
 
 const maxImageSize = 10 * 1024 * 1024;
-const categories = ["食費", "日用品", "交通費", "医療費", "娯楽", "その他"];
 const initialForm: ExpenseSavePayload = {
   shop_name: "",
   purchased_at: "",
@@ -26,6 +26,7 @@ export default function ExpenseEditPage({ onLogout, isSubmitting }: ExpenseEditP
   const navigate = useNavigate();
   const { expenseId } = useParams();
   const [expense, setExpense] = useState<SavedExpense | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [form, setForm] = useState<ExpenseSavePayload>(initialForm);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
@@ -40,8 +41,12 @@ export default function ExpenseEditPage({ onLogout, isSubmitting }: ExpenseEditP
         if (!Number.isInteger(id)) {
           throw new Error("invalid id");
         }
-        const data = await fetchExpenseDetail(id);
+        const [data, categoryList] = await Promise.all([
+          fetchExpenseDetail(id),
+          fetchCategories(),
+        ]);
         setExpense(data);
+        setCategories(categoryList);
         setForm({
           shop_name: data.shop_name,
           purchased_at: data.purchased_at,
@@ -167,14 +172,11 @@ export default function ExpenseEditPage({ onLogout, isSubmitting }: ExpenseEditP
             </label>
             <label>
               カテゴリー
-              <select
+              <CategorySelect
+                categories={categories}
                 value={form.category}
-                onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))}
-              >
-                {categories.map((category) => (
-                  <option key={category} value={category}>{category}</option>
-                ))}
-              </select>
+                onChange={(category) => setForm((current) => ({ ...current, category }))}
+              />
             </label>
             <label className={styles.fullWidth}>
               OCR全文

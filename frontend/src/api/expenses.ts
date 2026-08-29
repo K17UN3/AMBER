@@ -1,5 +1,18 @@
 import apiClient from "./client";
-import type { ExpenseSavePayload, MonthlySummaryResponse, SavedExpense } from "../types";
+import type { Category, ExpenseSavePayload, MonthlySummaryResponse, SavedExpense } from "../types";
+
+export async function fetchCategories() {
+  const response = await apiClient.get<Category[]>("/categories/");
+  return response.data;
+}
+
+export async function classifyCategory(shopName: string, rawOcrText: string) {
+  const response = await apiClient.post<Category>("/categories/classify/", {
+    shop_name: shopName,
+    raw_ocr_text: rawOcrText,
+  });
+  return response.data;
+}
 
 export async function saveExpense(payload: ExpenseSavePayload, image?: File | null) {
   const response = await apiClient.post<SavedExpense>(

@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import SimpleTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APITestCase
@@ -14,7 +14,8 @@ from .image_storage import (
     signed_receipt_image_url,
     upload_receipt_image,
 )
-from .models import Expense
+from .models import Category, Expense
+from .services import classify_category
 from receipts.models import OCRCorrectionHistory
 
 
@@ -83,12 +84,21 @@ class ExpenseApiTests(APITestCase):
             "category": "食費",
             "raw_ocr_text": "アンバーマート\n合計 1280",
         }
+        self.categories = {
+            category.name: category for category in Category.objects.all()
+        }
+
+    def create_expense(self, *, user, **values):
+        category = values.pop("category")
+        if isinstance(category, str):
+            category = self.categories[category]
+        return Expense.objects.create(user=user, category=category, **values)
 
     def test_monthly_summary_returns_only_current_user_totals(self):
-        Expense.objects.create(user=self.user, purchased_at="2026-06-05", total_amount=2500, category="食費")
-        Expense.objects.create(user=self.user, purchased_at="2026-06-10", total_amount=1800, category="日用品")
-        Expense.objects.create(user=self.user, purchased_at="2026-06-12", total_amount=4200, category="食費")
-        Expense.objects.create(user=self.other_user, purchased_at="2026-06-07", total_amount=9999, category="その他")
+        self.create_expense(user=self.user, purchased_at="2026-06-05", total_amount=2500, category="食費")
+        self.create_expense(user=self.user, purchased_at="2026-06-10", total_amount=1800, category="日用品")
+        self.create_expense(user=self.user, purchased_at="2026-06-12", total_amount=4200, category="食費")
+        self.create_expense(user=self.other_user, purchased_at="2026-06-07", total_amount=9999, category="その他")
 
         self.client.force_authenticate(self.user)
         response = self.client.get(reverse("monthly-summary"), {"year": 2026, "month": 6})
@@ -130,11 +140,17 @@ class ExpenseApiTests(APITestCase):
             "raw_ocr_text": "OCR店名\n合計 1200",
             "confidence": 91.5,
             "engine": "tesseract.js",
+            "category": "食費",
         }
 
         response = self.client.post(
             reverse("expense-list"),
-            {**self.payload, "ocr_result": ocr_result, "shop_name": "修正後の店名"},
+            {
+                **self.payload,
+                "ocr_result": ocr_result,
+                "shop_name": "修正後の店名",
+                "category": "日用品",
+            },
             format="json",
         )
 
@@ -143,7 +159,9 @@ class ExpenseApiTests(APITestCase):
         self.assertEqual(history.expense_id, response.data["id"])
         self.assertEqual(history.ocr_values["shop_name"], "OCR店名")
         self.assertEqual(history.ocr_values["engine"], "tesseract.js")
+        self.assertEqual(history.ocr_values["category"], "食費")
         self.assertEqual(history.saved_values["shop_name"], "修正後の店名")
+        self.assertEqual(history.saved_values["category"], "日用品")
         self.assertNotIn("ocr_result", response.data)
 
     def test_expense_create_rolls_back_when_history_creation_fails(self):
@@ -199,9 +217,51 @@ class ExpenseApiTests(APITestCase):
         self.assertIn("total_amount", response.data)
         self.assertIn("category", response.data)
 
+    def test_expense_create_rejects_unknown_category(self):
+        self.client.force_authenticate(self.user)
+
+        response = self.client.post(
+            reverse("expense-list"),
+            {**self.payload, "category": "医療費"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("category", response.data)
+
+    def test_category_list_returns_initial_categories(self):
+        self.client.force_authenticate(self.user)
+
+        response = self.client.get(reverse("category-list"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [category["name"] for category in response.data],
+            ["食費", "日用品", "交通費", "その他"],
+        )
+
+    def test_category_classification_prefers_shop_name(self):
+        self.client.force_authenticate(self.user)
+
+        response = self.client.post(
+            reverse("category-classify"),
+            {"shop_name": "アンバースーパー", "raw_ocr_text": "バス運賃"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["name"], "食費")
+
+    def test_category_endpoints_require_login(self):
+        list_response = self.client.get(reverse("category-list"))
+        classify_response = self.client.post(reverse("category-classify"), {}, format="json")
+
+        self.assertEqual(list_response.status_code, 403)
+        self.assertEqual(classify_response.status_code, 403)
+
     def test_expense_list_returns_only_current_user_records(self):
-        Expense.objects.create(user=self.user, **self.payload)
-        Expense.objects.create(
+        self.create_expense(user=self.user, **self.payload)
+        self.create_expense(
             user=self.other_user,
             shop_name="別ユーザー店",
             purchased_at="2026-06-13",
@@ -217,7 +277,7 @@ class ExpenseApiTests(APITestCase):
         self.assertEqual(response.data[0]["shop_name"], "アンバーマート")
 
     def test_expense_put_updates_current_user_record(self):
-        expense = Expense.objects.create(
+        expense = self.create_expense(
             user=self.user,
             image="https://res.cloudinary.com/demo/image/upload/old.jpg",
             image_public_id="amber/receipts/1/old",
@@ -241,12 +301,12 @@ class ExpenseApiTests(APITestCase):
         expense.refresh_from_db()
         self.assertEqual(expense.shop_name, "更新後マート")
         self.assertEqual(expense.total_amount, 1500)
-        self.assertEqual(expense.category, "日用品")
+        self.assertEqual(expense.category.name, "日用品")
         self.assertEqual(expense.image_public_id, "amber/receipts/1/old")
         self.assertNotIn("image_public_id", response.data)
 
     def test_expense_put_validates_required_fields(self):
-        expense = Expense.objects.create(user=self.user, **self.payload)
+        expense = self.create_expense(user=self.user, **self.payload)
         self.client.force_authenticate(self.user)
 
         response = self.client.put(
@@ -261,7 +321,7 @@ class ExpenseApiTests(APITestCase):
         self.assertIn("category", response.data)
 
     def test_expense_patch_updates_only_supplied_fields(self):
-        expense = Expense.objects.create(user=self.user, **self.payload)
+        expense = self.create_expense(user=self.user, **self.payload)
         self.client.force_authenticate(self.user)
 
         response = self.client.patch(
@@ -274,10 +334,10 @@ class ExpenseApiTests(APITestCase):
         expense.refresh_from_db()
         self.assertEqual(expense.shop_name, "一部更新")
         self.assertEqual(expense.total_amount, 1280)
-        self.assertEqual(expense.category, "食費")
+        self.assertEqual(expense.category.name, "食費")
 
     def test_other_users_expense_cannot_be_viewed_updated_or_deleted(self):
-        expense = Expense.objects.create(user=self.other_user, **self.payload)
+        expense = self.create_expense(user=self.other_user, **self.payload)
         self.client.force_authenticate(self.user)
 
         detail_response = self.client.get(reverse("expense-detail", args=[expense.id]))
@@ -295,7 +355,7 @@ class ExpenseApiTests(APITestCase):
         self.assertEqual(expense.shop_name, "アンバーマート")
 
     def test_expense_detail_update_and_delete_require_login(self):
-        expense = Expense.objects.create(user=self.user, **self.payload)
+        expense = self.create_expense(user=self.user, **self.payload)
         url = reverse("expense-detail", args=[expense.id])
 
         detail_response = self.client.get(url)
@@ -309,7 +369,7 @@ class ExpenseApiTests(APITestCase):
         self.assertEqual(expense.shop_name, "アンバーマート")
 
     def test_expense_delete_removes_record(self):
-        expense = Expense.objects.create(user=self.user, **self.payload)
+        expense = self.create_expense(user=self.user, **self.payload)
         self.client.force_authenticate(self.user)
 
         response = self.client.delete(reverse("expense-detail", args=[expense.id]))
@@ -383,7 +443,7 @@ class ExpenseApiTests(APITestCase):
     def test_expense_image_replacement_cleans_up_old_image(
         self, upload_mock, delete_mock, _signed_url_mock
     ):
-        expense = Expense.objects.create(
+        expense = self.create_expense(
             user=self.user,
             image="https://res.cloudinary.com/example/image/upload/old.jpg",
             image_public_id="amber/receipts/1/old",
@@ -412,7 +472,7 @@ class ExpenseApiTests(APITestCase):
 
     @patch("expenses.views.delete_receipt_image")
     def test_expense_delete_cleans_up_managed_image(self, delete_mock):
-        expense = Expense.objects.create(
+        expense = self.create_expense(
             user=self.user,
             image="https://res.cloudinary.com/example/image/upload/old.jpg",
             image_public_id="amber/receipts/1/old",
@@ -457,7 +517,7 @@ class ExpenseApiTests(APITestCase):
         self.assertFalse(Expense.objects.exists())
 
     def test_update_and_delete_are_reflected_in_monthly_summary(self):
-        expense = Expense.objects.create(user=self.user, **self.payload)
+        expense = self.create_expense(user=self.user, **self.payload)
         self.client.force_authenticate(self.user)
 
         self.client.patch(
@@ -488,22 +548,22 @@ class ExpenseApiTests(APITestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_monthly_summary_returns_totals_for_current_user_and_month(self):
-        Expense.objects.create(user=self.user, **self.payload)
-        Expense.objects.create(
+        self.create_expense(user=self.user, **self.payload)
+        self.create_expense(
             user=self.user,
             shop_name="ドラッグストア",
             purchased_at="2026-06-20",
             total_amount=720,
             category="日用品",
         )
-        Expense.objects.create(
+        self.create_expense(
             user=self.user,
             shop_name="別月の店",
             purchased_at="2026-05-31",
             total_amount=5000,
             category="食費",
         )
-        Expense.objects.create(
+        self.create_expense(
             user=self.other_user,
             shop_name="別ユーザー店",
             purchased_at="2026-06-13",
@@ -537,7 +597,7 @@ class ExpenseApiTests(APITestCase):
 
     def test_monthly_summary_defaults_to_current_year_month(self):
         today = timezone.localdate()
-        Expense.objects.create(
+        self.create_expense(
             user=self.user,
             shop_name="今月の店",
             purchased_at=today,
@@ -561,3 +621,18 @@ class ExpenseApiTests(APITestCase):
 
         self.assertEqual(invalid_year_response.status_code, 400)
         self.assertEqual(invalid_month_response.status_code, 400)
+
+
+class CategoryClassificationTests(TestCase):
+    def test_classifies_normalized_ocr_keyword(self):
+        category = classify_category(raw_ocr_text="交通系ＩＣでお支払い")
+
+        self.assertEqual(category.name, "交通費")
+
+    def test_returns_other_when_no_keyword_matches(self):
+        category = classify_category(
+            shop_name="アンバー商会",
+            raw_ocr_text="合計 1,280円",
+        )
+
+        self.assertEqual(category.name, "その他")
