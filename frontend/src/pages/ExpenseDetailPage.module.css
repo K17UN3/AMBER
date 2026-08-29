@@ -1,0 +1,169 @@
+.shell {
+  width: min(960px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 24px 0 40px;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.header h1 {
+  margin: 0;
+}
+
+.eyebrow {
+  margin-bottom: 6px;
+  color: #6d5f49;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.error,
+.loading {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-radius: 6px;
+}
+
+.error {
+  border: 1px solid #dba1a1;
+  background: #fff3f3;
+  color: #812828;
+  white-space: pre-wrap;
+}
+
+.loading {
+  border: 1px solid #d8dcd2;
+  background: #fff;
+}
+
+.detailPanel {
+  padding: 20px;
+  border: 1px solid #d8dcd2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.detailList {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin: 0;
+}
+
+.detailList dt {
+  color: #697066;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.detailList dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.detailList img {
+  display: block;
+  width: min(100%, 640px);
+  max-height: 560px;
+  object-fit: contain;
+  border: 1px solid #d8dcd2;
+  border-radius: 8px;
+  background: #f0f2ec;
+}
+
+.fullWidth {
+  grid-column: 1 / -1;
+}
+
+.ocrText {
+  padding: 14px;
+  border-radius: 6px;
+  background: #f5f6f2;
+  white-space: pre-wrap;
+}
+
+.actions,
+.dialogActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.actions button,
+.dialogActions button {
+  min-width: 128px;
+  min-height: 46px;
+  font-weight: 800;
+}
+
+.editButton {
+  background: #25634d;
+}
+
+.deleteButton {
+  background: #a93232;
+}
+
+.secondaryButton {
+  border: 1px solid #cfd5c9;
+  background: #fff;
+  color: #20231f;
+}
+
+.dialog {
+  width: min(440px, calc(100% - 32px));
+  padding: 22px;
+  border: 1px solid #d2b0b0;
+  border-radius: 8px;
+  background: #fff;
+  color: #20231f;
+}
+
+.dialog::backdrop {
+  background: rgb(20 25 22 / 55%);
+}
+
+.dialog h2 {
+  margin: 0 0 8px;
+  font-size: 21px;
+}
+
+.dialog p {
+  margin: 0;
+  color: #60675e;
+}
+
+@media (max-width: 640px) {
+  .shell {
+    width: min(100% - 24px, 480px);
+    padding-top: 18px;
+  }
+
+  .header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .detailList {
+    grid-template-columns: 1fr;
+  }
+
+  .fullWidth {
+    grid-column: auto;
+  }
+
+  .actions {
+    display: grid;
+  }
+
+  .actions button {
+    width: 100%;
+  }
+}

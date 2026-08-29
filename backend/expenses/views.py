@@ -1,79 +1,203 @@
+import json
+
 from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import status
+from rest_framework.exceptions import APIException, NotFound, ValidationError
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .image_storage import (
+    ImageStorageError,
+    ImageValidationError,
+    delete_receipt_image,
+    upload_receipt_image,
+)
 from .models import Category, Expense
-from .serializers import CategorySerializer, ExpenseSerializer
-from receipts.models import OCRCorrectionHistory, OCRJob
+from .serializers import (
+    CategoryClassificationInputSerializer,
+    CategorySerializer,
+    ExpenseSerializer,
+)
+from .services import classify_category
+from receipts.models import OCRCorrectionHistory
+
+
+class ImageStorageUnavailable(APIException):
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    default_code = "image_storage_unavailable"
 
 
 class CategoryListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        serializer = CategorySerializer(Category.objects.all(), many=True)
-        return Response(serializer.data)
+        return Response(CategorySerializer(Category.objects.all(), many=True).data)
+
+
+class CategoryClassifyView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = CategoryClassificationInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        category = classify_category(**serializer.validated_data)
+        return Response(CategorySerializer(category).data)
 
 
 class ExpenseListCreateView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def get(self, request):
-        expenses = Expense.objects.filter(user=request.user)
+        expenses = Expense.objects.filter(user=request.user).select_related("category")
         serializer = ExpenseSerializer(expenses, many=True)
         return Response(serializer.data)
 
     def post(self, request):
-        serializer = ExpenseSerializer(data=request.data)
+        data, image = _expense_request_data(request)
+        serializer = ExpenseSerializer(data=data)
         serializer.is_valid(raise_exception=True)
-        ocr_job_id = serializer.validated_data.get("ocr_job_id")
-        ocr_job = None
-        if ocr_job_id:
-            ocr_job = OCRJob.objects.filter(
-                pk=ocr_job_id,
-                user=request.user,
-                status=OCRJob.Status.SUCCEEDED,
-            ).first()
-            if ocr_job is None:
-                return Response({"ocr_job_id": ["完了したOCRジョブを指定してください。"]}, status=status.HTTP_400_BAD_REQUEST)
-        with transaction.atomic():
-            expense = serializer.save(user=request.user)
-            if ocr_job:
-                OCRCorrectionHistory.objects.create(
-                    job=ocr_job,
-                    expense=expense,
-                    ocr_values={
-                        "shop_name": ocr_job.shop_name,
-                        "purchased_at": ocr_job.purchased_at.isoformat() if ocr_job.purchased_at else None,
-                        "total_amount": ocr_job.total_amount,
-                        "raw_ocr_text": ocr_job.raw_ocr_text,
-                        "category": ocr_job.category.name if ocr_job.category else "その他",
-                    },
-                    saved_values={
-                        "shop_name": expense.shop_name,
-                        "purchased_at": expense.purchased_at.isoformat(),
-                        "total_amount": expense.total_amount,
-                        "category": expense.category.name,
-                        "raw_ocr_text": expense.raw_ocr_text,
-                    },
-                )
+        ocr_result = serializer.validated_data.get("ocr_result")
+        uploaded_image = _upload_image_or_error(image, request.user.id)
+        image_values = _uploaded_image_values(uploaded_image)
+        try:
+            with transaction.atomic():
+                expense = serializer.save(user=request.user, **image_values)
+                if ocr_result:
+                    automatic_category = ocr_result.get("category")
+                    if automatic_category is None:
+                        automatic_category = classify_category(
+                            shop_name=ocr_result.get("shop_name") or "",
+                            raw_ocr_text=ocr_result.get("raw_ocr_text") or "",
+                        ).name
+                    OCRCorrectionHistory.objects.create(
+                        expense=expense,
+                        ocr_values={
+                            **ocr_result,
+                            "purchased_at": (
+                                ocr_result["purchased_at"].isoformat()
+                                if ocr_result["purchased_at"]
+                                else None
+                            ),
+                            "category": automatic_category,
+                        },
+                        saved_values={
+                            "shop_name": expense.shop_name,
+                            "purchased_at": expense.purchased_at.isoformat(),
+                            "total_amount": expense.total_amount,
+                            "category": expense.category.name,
+                            "raw_ocr_text": expense.raw_ocr_text,
+                        },
+                    )
+        except Exception:
+            if uploaded_image:
+                delete_receipt_image(uploaded_image.public_id)
+            raise
         return Response(ExpenseSerializer(expense).data, status=status.HTTP_201_CREATED)
 
 
 class ExpenseDetailView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def get(self, request, pk):
-        expense = Expense.objects.filter(user=request.user, pk=pk).first()
-        if expense is None:
-            return Response(status=status.HTTP_404_NOT_FOUND)
+        expense = self._get_expense(request, pk)
 
         serializer = ExpenseSerializer(expense)
         return Response(serializer.data)
+
+    def put(self, request, pk):
+        return self._update(request, pk, partial=False)
+
+    def patch(self, request, pk):
+        return self._update(request, pk, partial=True)
+
+    def delete(self, request, pk):
+        expense = self._get_expense(request, pk)
+        public_id = expense.image_public_id
+
+        with transaction.atomic():
+            expense.delete()
+            if public_id:
+                transaction.on_commit(lambda public_id=public_id: delete_receipt_image(public_id))
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def _update(self, request, pk, partial):
+        expense = self._get_expense(request, pk)
+        data, image = _expense_request_data(request)
+        serializer = ExpenseSerializer(expense, data=data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+
+        uploaded_image = _upload_image_or_error(image, request.user.id)
+        old_public_id = expense.image_public_id
+        image_values = _uploaded_image_values(uploaded_image)
+
+        try:
+            with transaction.atomic():
+                expense = serializer.save(**image_values)
+                if old_public_id and old_public_id != expense.image_public_id:
+                    transaction.on_commit(
+                        lambda public_id=old_public_id: delete_receipt_image(public_id)
+                    )
+        except Exception:
+            if uploaded_image:
+                delete_receipt_image(uploaded_image.public_id)
+            raise
+
+        return Response(ExpenseSerializer(expense).data)
+
+    @staticmethod
+    def _get_expense(request, pk):
+        expense = (
+            Expense.objects.filter(user=request.user, pk=pk)
+            .select_related("category")
+            .first()
+        )
+        if expense is None:
+            raise NotFound()
+        return expense
+
+
+def _expense_request_data(request):
+    image = request.FILES.get("image")
+    if image is None:
+        return request.data, None
+
+    data = {key: value for key, value in request.data.items() if key != "image"}
+    ocr_result = data.get("ocr_result")
+    if isinstance(ocr_result, str):
+        try:
+            data["ocr_result"] = json.loads(ocr_result)
+        except json.JSONDecodeError as exc:
+            raise ValidationError({"ocr_result": ["OCR解析結果の形式が不正です。"]}) from exc
+    return data, image
+
+
+def _upload_image_or_error(image, user_id):
+    if image is None:
+        return None
+
+    try:
+        return upload_receipt_image(image, user_id)
+    except ImageValidationError as exc:
+        raise ValidationError({"image": [str(exc)]}) from exc
+    except ImageStorageError as exc:
+        raise ImageStorageUnavailable(str(exc)) from exc
+
+
+def _uploaded_image_values(uploaded_image):
+    if uploaded_image is None:
+        return {}
+    return {
+        "image": uploaded_image.url,
+        "image_public_id": uploaded_image.public_id,
+        "image_format": uploaded_image.format,
+    }
 
 
 class MonthlyExpenseSummaryView(APIView):

@@ -19,7 +19,7 @@ export default function CategorySelect({
       onChange={(event) => onChange(event.target.value)}
       disabled={disabled || categories.length === 0}
     >
-      {categories.length === 0 ? <option value="その他">その他</option> : null}
+      {categories.length === 0 ? <option value={value || "その他"}>{value || "その他"}</option> : null}
       {categories.map((category) => (
         <option key={category.id} value={category.name}>
           {category.name}

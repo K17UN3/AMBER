@@ -1,0 +1,191 @@
+.shell {
+  width: min(960px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 24px 0 40px;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.header h1,
+.imageSection h2 {
+  margin: 0;
+}
+
+.eyebrow {
+  margin-bottom: 6px;
+  color: #6d5f49;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.error,
+.loading {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-radius: 6px;
+}
+
+.error {
+  border: 1px solid #dba1a1;
+  background: #fff3f3;
+  color: #812828;
+  white-space: pre-wrap;
+}
+
+.loading {
+  border: 1px solid #d8dcd2;
+  background: #fff;
+}
+
+.form {
+  display: grid;
+  gap: 18px;
+}
+
+.formGrid,
+.imageSection {
+  padding: 20px;
+  border: 1px solid #d8dcd2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.formGrid label {
+  display: grid;
+  color: #3a4037;
+  font-weight: 700;
+}
+
+.formGrid input,
+.formGrid select,
+.formGrid textarea {
+  width: 100%;
+  min-height: 46px;
+  margin-top: 7px;
+  padding: 10px 12px;
+  border: 1px solid #cfd5c9;
+  border-radius: 6px;
+  background: #fff;
+  color: #20231f;
+}
+
+.formGrid textarea {
+  min-height: 132px;
+  resize: vertical;
+}
+
+.fullWidth {
+  grid-column: 1 / -1;
+}
+
+.imageSection {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(260px, 1.2fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.imageSection h2 {
+  font-size: 20px;
+}
+
+.imageSection p {
+  color: #697066;
+  overflow-wrap: anywhere;
+}
+
+.fileButton {
+  display: inline-grid;
+  place-items: center;
+  min-height: 44px;
+  margin-top: 14px;
+  padding: 0 16px;
+  border: 1px solid #25634d;
+  border-radius: 6px;
+  color: #25634d;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.fileButton input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.preview {
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+  overflow: hidden;
+  border: 1px solid #d8dcd2;
+  border-radius: 8px;
+  background: #f0f2ec;
+  color: #697066;
+}
+
+.preview img {
+  width: 100%;
+  max-height: 420px;
+  object-fit: contain;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 0.3fr);
+  gap: 12px;
+}
+
+.actions button {
+  min-height: 50px;
+  font-weight: 800;
+}
+
+.saveButton {
+  background: #25634d;
+}
+
+.secondaryButton {
+  border: 1px solid #cfd5c9;
+  background: #fff;
+  color: #20231f;
+}
+
+@media (max-width: 720px) {
+  .shell {
+    width: min(100% - 24px, 480px);
+    padding-top: 18px;
+  }
+
+  .header,
+  .imageSection {
+    grid-template-columns: 1fr;
+  }
+
+  .header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .formGrid,
+  .actions {
+    grid-template-columns: 1fr;
+  }
+
+  .fullWidth {
+    grid-column: auto;
+  }
+}

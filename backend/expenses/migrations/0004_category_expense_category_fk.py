@@ -30,7 +30,7 @@ def seed_categories_and_migrate_expenses(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("expenses", "0001_initial"),
+        ("expenses", "0003_expense_image_format"),
     ]
 
     operations = [

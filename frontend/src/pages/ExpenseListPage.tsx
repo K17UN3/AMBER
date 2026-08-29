@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { fetchExpenses } from "../api/expenses";
+import Toast from "../components/Toast";
 import type { SavedExpense } from "../types";
 import { formatCurrency } from "../utils/format";
 import styles from "./ComingSoonPage.module.css";
@@ -13,9 +14,19 @@ type ExpenseListPageProps = {
 
 export default function ExpenseListPage({ onLogout, isSubmitting }: ExpenseListPageProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [expenses, setExpenses] = useState<SavedExpense[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [toast, setToast] = useState(
+    () => (location.state as { toast?: string } | null)?.toast ?? "",
+  );
+
+  useEffect(() => {
+    if ((location.state as { toast?: string } | null)?.toast) {
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.pathname, location.state, navigate]);
 
   useEffect(() => {
     async function loadExpenses() {
@@ -37,6 +48,7 @@ export default function ExpenseListPage({ onLogout, isSubmitting }: ExpenseListP
 
   return (
     <main className={styles.shell}>
+      <Toast message={toast} onDismiss={() => setToast("")} />
       <header className={styles.header}>
         <div>
           <p className={styles.eyebrow}>支出一覧</p>

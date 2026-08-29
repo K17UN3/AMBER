@@ -35,6 +35,7 @@
 }
 
 .notice,
+.warning,
 .error {
   margin: 0 0 16px;
   padding: 10px 12px;
@@ -45,6 +46,12 @@
 .notice {
   border: 1px solid #a9ccb9;
   background: #eef8f2;
+}
+
+.warning {
+  border: 1px solid #d8bd73;
+  background: #fff8df;
+  color: #684f0b;
 }
 
 .error {
@@ -183,6 +190,16 @@
   border: 1px solid #d8dcd2;
   border-radius: 8px;
   background: #fff;
+}
+
+.loadingPanel progress {
+  width: min(320px, calc(100% - 48px));
+  height: 12px;
+  accent-color: #25634d;
+}
+
+.loadingPanel small {
+  color: #697066;
 }
 
 .spinner {

@@ -36,25 +36,17 @@ export type Category = {
   name: string;
 };
 
-export type OCRJob = {
-  id: string;
-  status: "pending" | "processing" | "succeeded" | "failed";
+export type ReceiptOCRResult = {
   shop_name: string | null;
   purchased_at: string | null;
   total_amount: number | null;
   raw_ocr_text: string;
-  category: string | null;
-  ocr_lines: Array<{
-    text: string;
-    confidence: number | null;
-    coordinates: unknown;
-  }>;
-  error_message: string;
-  image?: {
-    name: string;
-    size: number;
-    content_type: string;
-  };
+  confidence: number;
+  engine: "tesseract.js";
+};
+
+export type ClientOCRResult = ReceiptOCRResult & {
+  category?: string;
 };
 
 export type ExpenseSavePayload = {
@@ -62,14 +54,14 @@ export type ExpenseSavePayload = {
   purchased_at: string;
   total_amount: number;
   category: string;
-  image?: string;
   raw_ocr_text: string;
-  ocr_job_id?: string;
+  ocr_result?: ClientOCRResult;
 };
 
 export type SavedExpense = ExpenseSavePayload & {
   id: number;
   user: number;
+  image: string;
   created_at: string;
   updated_at: string;
 };
